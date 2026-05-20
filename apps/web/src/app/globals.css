@@ -1,0 +1,84 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@plugin "@tailwindcss/typography";
+
+/* === Design System — PromptHub (Dermadry AIBIS brand) === */
+:root {
+  /* Shadcn/base-ui variables — mapped to design system */
+  --background: #ffffff;
+  --foreground: #1a2130;
+  --card: #ffffff;
+  --card-foreground: #1a2130;
+  --popover: #ffffff;
+  --popover-foreground: #1a2130;
+  --primary: #275d89;
+  --primary-foreground: #ffffff;
+  --secondary: #eef1f6;
+  --secondary-foreground: #1a2130;
+  --muted: #f7f9fc;
+  --muted-foreground: #5a6374;
+  --accent: #eef1f6;
+  --accent-foreground: #1a2130;
+  --destructive: #e04b4b;
+  --destructive-foreground: #ffffff;
+  --border: #dde1e7;
+  --input: #dde1e7;
+  --ring: #50c4cf;
+  --radius: 0.5rem;
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@theme inline {
+  /* === Shadcn CSS-var → Tailwind color utility mappings ===
+     These make bg-foreground, text-background, bg-primary, etc. work. */
+  --color-background:           var(--background);
+  --color-foreground:           var(--foreground);
+  --color-card:                 var(--card);
+  --color-card-foreground:      var(--card-foreground);
+  --color-popover:              var(--popover);
+  --color-popover-foreground:   var(--popover-foreground);
+  --color-primary:              var(--primary);
+  --color-primary-foreground:   var(--primary-foreground);
+  --color-secondary:            var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted:                var(--muted);
+  --color-muted-foreground:     var(--muted-foreground);
+  --color-accent:               var(--accent);
+  --color-accent-foreground:    var(--accent-foreground);
+  --color-destructive:          var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border:               var(--border);
+  --color-input:                var(--input);
+  --color-ring:                 var(--ring);
+
+  /* === Brand custom utilities === */
+  --color-navy:      #275D89;
+  --color-navy-dark: #1f4d76;
+  --color-teal:      #50C4CF;
+  --color-gold:      #d9b800;
+  --color-surface:   #F7F9FC;
+  --color-subtle:    #EEF1F6;
+  --color-divider:   #DDE1E7;
+  --color-muted-fg:  #9AA3B0;
+  --color-body:      #1A2130;
+  --color-success:   #2ECC9A;
+  --color-warning:   #F5A623;
+  --color-danger:    #E04B4B;
+
+  --font-sans: var(--font-montserrat);
+  --font-mono: var(--font-geist-mono);
+}
+
+html {
+  background-color: #F7F9FC;
+  color: #1A2130;
+}
+
+body {
+  background: #F7F9FC;
+  color: #1A2130;
+  font-family: var(--font-montserrat), Montserrat, sans-serif;
+}

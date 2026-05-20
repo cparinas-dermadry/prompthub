@@ -1,0 +1,26 @@
+{
+  "name": "PromptHub",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "turbo dev --no-daemon",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "format": "prettier --write \"**/*.{ts,tsx,js,mjs,json,md}\" --ignore-path .gitignore"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.28.0",
+  "devDependencies": {
+    "prettier": "^3",
+    "turbo": "^2.9.14"
+  },
+  "pnpm": {
+    "overrides": {
+      "@clerk/shared": "4.12.0"
+    }
+  }
+}

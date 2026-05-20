@@ -1,0 +1,262 @@
+export interface ProviderConfig {
+  id: string;
+  displayName: string;
+  /** UI grouping label — also stored as thread.provider in the DB */
+  provider: string;
+  /** OpenRouter provider slug used in provider.only for BYOK routing */
+  openRouterProvider: string;
+  /** When true, force-route through provider.only so BYOK keys are used */
+  byokOnly: boolean;
+  logoColor: string;
+  defaultTemperature: number;
+  contextWindow: number;
+  costPer1kTokens: number;
+  via: 'openrouter';
+  free?: boolean;
+  /** Marks the recommended/default model for its provider group */
+  isDefault?: boolean;
+}
+
+export const PROVIDER_REGISTRY: ProviderConfig[] = [
+  // ── Anthropic — BYOK provider: "Anthropic" ───────────────────────────────────
+  {
+    // Correct OpenRouter slug uses dot notation: claude-sonnet-4.5
+    id: 'anthropic/claude-sonnet-4.5',
+    displayName: 'Claude Sonnet 4.5',
+    provider: 'Anthropic',
+    openRouterProvider: 'Anthropic',
+    byokOnly: true,
+    isDefault: true,
+    logoColor: '#D97757',
+    defaultTemperature: 0.7,
+    contextWindow: 1000000,
+    costPer1kTokens: 0.003,
+    via: 'openrouter',
+  },
+  {
+    // Anthropic direct provider going away June 15, 2026 — migrate to claude-sonnet-4.5 after that date
+    id: 'anthropic/claude-sonnet-4',
+    displayName: 'Claude Sonnet 4',
+    provider: 'Anthropic',
+    openRouterProvider: 'Anthropic',
+    byokOnly: true,
+    logoColor: '#D97757',
+    defaultTemperature: 0.7,
+    contextWindow: 1000000,
+    costPer1kTokens: 0.003,
+    via: 'openrouter',
+  },
+  {
+    id: 'anthropic/claude-opus-4',
+    displayName: 'Claude Opus 4',
+    provider: 'Anthropic',
+    openRouterProvider: 'Anthropic',
+    byokOnly: true,
+    logoColor: '#D97757',
+    defaultTemperature: 0.7,
+    contextWindow: 200000,
+    costPer1kTokens: 0.015,
+    via: 'openrouter',
+  },
+  {
+    id: 'anthropic/claude-opus-4.7-fast',
+    displayName: 'Claude Opus 4.7 Fast',
+    provider: 'Anthropic',
+    openRouterProvider: 'Anthropic',
+    byokOnly: true,
+    logoColor: '#D97757',
+    defaultTemperature: 0.7,
+    contextWindow: 1000000,
+    costPer1kTokens: 0.03,
+    via: 'openrouter',
+  },
+  {
+    // claude-3.5-haiku is NOT available on Anthropic direct — replaced by claude-haiku-4.5
+    id: 'anthropic/claude-haiku-4.5',
+    displayName: 'Claude Haiku 4.5',
+    provider: 'Anthropic',
+    openRouterProvider: 'Anthropic',
+    byokOnly: true,
+    logoColor: '#D97757',
+    defaultTemperature: 0.7,
+    contextWindow: 200000,
+    costPer1kTokens: 0.001,
+    via: 'openrouter',
+  },
+  // ── OpenAI — no BYOK configured; requires OpenRouter credits or OpenAI BYOK ──
+  {
+    id: 'openai/gpt-4o',
+    displayName: 'GPT-4o',
+    provider: 'OpenAI',
+    openRouterProvider: 'OpenAI',
+    byokOnly: false,
+    isDefault: true,
+    logoColor: '#10A37F',
+    defaultTemperature: 0.7,
+    contextWindow: 128000,
+    costPer1kTokens: 0.005,
+    via: 'openrouter',
+  },
+  {
+    id: 'openai/gpt-4o-mini',
+    displayName: 'GPT-4o Mini',
+    provider: 'OpenAI',
+    openRouterProvider: 'OpenAI',
+    byokOnly: false,
+    logoColor: '#10A37F',
+    defaultTemperature: 0.7,
+    contextWindow: 128000,
+    costPer1kTokens: 0.00015,
+    via: 'openrouter',
+  },
+  // ── Google — BYOK provider: "Google AI Studio" ────────────────────────────────
+  {
+    // Released May 19, 2026 — replaces gemini-2.0-flash-001 (retiring June 1, 2026)
+    id: 'google/gemini-3.5-flash',
+    displayName: 'Gemini 3.5 Flash',
+    provider: 'Google',
+    openRouterProvider: 'Google AI Studio',
+    byokOnly: true,
+    isDefault: true,
+    logoColor: '#4285F4',
+    defaultTemperature: 0.7,
+    contextWindow: 1000000,
+    costPer1kTokens: 0.0015,
+    via: 'openrouter',
+  },
+  {
+    id: 'google/gemini-2.5-pro',
+    displayName: 'Gemini 2.5 Pro',
+    provider: 'Google',
+    openRouterProvider: 'Google AI Studio',
+    byokOnly: true,
+    logoColor: '#4285F4',
+    defaultTemperature: 0.7,
+    contextWindow: 1000000,
+    costPer1kTokens: 0.00125,
+    via: 'openrouter',
+  },
+  // ── xAI ──────────────────────────────────────────────────────────────────────
+  {
+    id: 'x-ai/grok-2',
+    displayName: 'Grok-2',
+    provider: 'xAI',
+    openRouterProvider: 'xAI',
+    byokOnly: false,
+    isDefault: true,
+    logoColor: '#000000',
+    defaultTemperature: 0.7,
+    contextWindow: 131072,
+    costPer1kTokens: 0.002,
+    via: 'openrouter',
+  },
+  // ── Perplexity ────────────────────────────────────────────────────────────────
+  {
+    id: 'perplexity/sonar-pro',
+    displayName: 'Perplexity Sonar Pro',
+    provider: 'Perplexity',
+    openRouterProvider: 'Perplexity',
+    byokOnly: false,
+    isDefault: true,
+    logoColor: '#20808D',
+    defaultTemperature: 0.7,
+    contextWindow: 200000,
+    costPer1kTokens: 0.003,
+    via: 'openrouter',
+  },
+  // ── Free models ───────────────────────────────────────────────────────────────
+  {
+    id: 'deepseek/deepseek-v4-flash:free',
+    displayName: 'DeepSeek V4 Flash',
+    provider: 'DeepSeek',
+    openRouterProvider: 'DeepSeek',
+    byokOnly: false,
+    isDefault: true,
+    logoColor: '#4D6BFE',
+    defaultTemperature: 0.7,
+    contextWindow: 1000000,
+    costPer1kTokens: 0,
+    via: 'openrouter',
+    free: true,
+  },
+  {
+    id: 'meta-llama/llama-3.3-70b-instruct:free',
+    displayName: 'Llama 3.3 70B',
+    provider: 'Meta',
+    openRouterProvider: 'Meta Llama',
+    byokOnly: false,
+    isDefault: true,
+    logoColor: '#0064E0',
+    defaultTemperature: 0.7,
+    contextWindow: 131072,
+    costPer1kTokens: 0,
+    via: 'openrouter',
+    free: true,
+  },
+  {
+    // Free tier served by third-party inference providers, not Google AI Studio BYOK
+    id: 'google/gemma-4-31b-it:free',
+    displayName: 'Gemma 4 31B',
+    provider: 'Google',
+    openRouterProvider: 'Google AI Studio',
+    byokOnly: false,
+    logoColor: '#4285F4',
+    defaultTemperature: 0.7,
+    contextWindow: 262144,
+    costPer1kTokens: 0,
+    via: 'openrouter',
+    free: true,
+  },
+  // ── Additional models ─────────────────────────────────────────────────────────
+  {
+    id: 'mistralai/mistral-large-2',
+    displayName: 'Mistral Large 2',
+    provider: 'Mistral',
+    openRouterProvider: 'Mistral',
+    byokOnly: false,
+    logoColor: '#FF7000',
+    defaultTemperature: 0.7,
+    contextWindow: 128000,
+    costPer1kTokens: 0.002,
+    via: 'openrouter',
+  },
+  {
+    id: 'z-ai/glm-4.5-air:free',
+    displayName: 'GLM 4.5 Air',
+    provider: 'Z.ai',
+    openRouterProvider: 'Z.ai',
+    byokOnly: false,
+    logoColor: '#0D7AEC',
+    defaultTemperature: 0.7,
+    contextWindow: 131072,
+    costPer1kTokens: 0,
+    via: 'openrouter',
+    free: true,
+  },
+  {
+    id: 'nvidia/nemotron-3-super-120b-a12b:free',
+    displayName: 'Nemotron 3 Super 120B',
+    provider: 'NVIDIA',
+    openRouterProvider: 'NVIDIA',
+    byokOnly: false,
+    logoColor: '#76B900',
+    defaultTemperature: 0.7,
+    contextWindow: 1000000,
+    costPer1kTokens: 0,
+    via: 'openrouter',
+    free: true,
+  },
+  {
+    id: 'poolside/laguna-m.1:free',
+    displayName: 'Laguna M.1',
+    provider: 'Poolside',
+    openRouterProvider: 'Poolside',
+    byokOnly: false,
+    logoColor: '#4F8EF7',
+    defaultTemperature: 0.7,
+    contextWindow: 131072,
+    costPer1kTokens: 0,
+    via: 'openrouter',
+    free: true,
+  },
+];
