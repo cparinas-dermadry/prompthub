@@ -5,6 +5,7 @@ import {
   Patch,
   Delete,
   Param,
+  ParseUUIDPipe,
   Body,
   Query,
   HttpCode,
@@ -24,7 +25,7 @@ export class SessionsController {
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string, @CurrentUser() user: { sub: string }) {
+  findOne(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: { sub: string }) {
     return this.sessionsService.findOne(id, user.sub);
   }
 
@@ -36,7 +37,7 @@ export class SessionsController {
 
   @Patch(':id')
   update(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: { sub: string },
     @Body() dto: UpdateSessionDto,
   ) {
@@ -45,7 +46,7 @@ export class SessionsController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  remove(@Param('id') id: string, @CurrentUser() user: { sub: string }) {
+  remove(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: { sub: string }) {
     return this.sessionsService.remove(id, user.sub);
   }
 }

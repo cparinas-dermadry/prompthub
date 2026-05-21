@@ -6,7 +6,11 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   app.enableCors({
-    origin: process.env.ALLOWED_ORIGINS?.split(',') ?? ['http://localhost:3000'],
+    // Trim each entry so values like "https://a.com, https://b.com" don't
+    // produce " https://b.com" with a leading space (which fails CORS).
+    origin: process.env.ALLOWED_ORIGINS?.split(',').map((o) => o.trim()).filter(Boolean) ?? [
+      'http://localhost:3000',
+    ],
     credentials: true,
   });
 

@@ -1,9 +1,16 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service.js';
 import { CreateSessionDto, UpdateSessionDto } from './dto/session.dto.js';
 
 @Injectable()
 export class SessionsService {
+  private readonly logger = new Logger(SessionsService.name);
+
   constructor(private readonly supabase: SupabaseService) {}
 
   async findAll(userId: string, search?: string) {
@@ -18,7 +25,10 @@ export class SessionsService {
     }
 
     const { data, error } = await query;
-    if (error) throw new Error(error.message);
+    if (error) {
+      this.logger.error(`findAll failed: ${error.message}`);
+      throw new InternalServerErrorException('Database error');
+    }
     return data;
   }
 
@@ -46,7 +56,10 @@ export class SessionsService {
       .select()
       .single();
 
-    if (error) throw new Error(error.message);
+    if (error) {
+      this.logger.error(`create failed: ${error.message}`);
+      throw new InternalServerErrorException('Database error');
+    }
     return data;
   }
 

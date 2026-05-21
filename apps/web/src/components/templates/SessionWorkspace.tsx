@@ -28,6 +28,14 @@ export function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
   const { loading, error } = useSession(sessionId);
   const { adding, addThreads } = useAddThreads(sessionId);
   const sessionName = useSessionStore((s) => s.currentSession?.name);
+  // Subscribe to the loaded session id directly. We can't rely on `loading`
+  // alone for the auto-add guard: when sessionId changes, the closure-captured
+  // `loading` is still the previous (false) value on the first render, so the
+  // auto-add effect fires before useSession resets the store. The store's
+  // currentSession.id is updated synchronously (reset → null; setSession(B) →
+  // 'B' after hydration), so it's a reliable "this session is fully loaded"
+  // signal.
+  const loadedSessionId = useSessionStore((s) => s.currentSession?.id);
   const disabledProviders = useSessionStore(selectDisabledProviders);
   const { setSelectedProviders, pendingAutoAdd, clearPendingAutoAdd } = useUIStore();
   const providersLoaded = useUIStore((s) => s.providers.length > 0);
@@ -47,14 +55,34 @@ export function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
   addThreadsRef.current = addThreads; // always up-to-date without being a dep
 
   // Auto-add models queued by Sidebar before navigation.
-  // Fires as soon as the session finishes loading AND providers are in the store.
+  //
+  // Two guards matter here:
+  //   1. `pendingAutoAdd.sessionId === sessionId` — only consume the queue
+  //      when it's intended for THIS session (prevents leaking onto the
+  //      previously-open session during navigation).
+  //   2. `loadedSessionId === sessionId` — wait until useSession's server
+  //      load has populated the store with THIS session. Without this, the
+  //      auto-add fires before hydration completes; useSession's subsequent
+  //      setThreads(serverThreads) then clobbers the optimistic temp tiles,
+  //      and use-add-threads' post-write staleness check drops the real
+  //      threads it just created, so nothing appears until a refresh.
   useEffect(() => {
-    if (pendingAutoAdd.length === 0 || loading || !providersLoaded || autoAddFired.current === sessionId) return;
+    if (
+      !pendingAutoAdd ||
+      pendingAutoAdd.sessionId !== sessionId ||
+      loading ||
+      loadedSessionId !== sessionId ||
+      !providersLoaded ||
+      autoAddFired.current === sessionId
+    ) {
+      return;
+    }
     autoAddFired.current = sessionId;
+    const modelIds = pendingAutoAdd.modelIds;
     clearPendingAutoAdd();
-    void addThreadsRef.current(pendingAutoAdd);
+    void addThreadsRef.current(modelIds);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingAutoAdd, loading, providersLoaded, sessionId]);
+  }, [pendingAutoAdd, loading, loadedSessionId, providersLoaded, sessionId]);
 
   function openSelector() {
     // Pre-select auto-add models (user can still change before confirming)

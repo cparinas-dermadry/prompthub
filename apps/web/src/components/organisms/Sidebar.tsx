@@ -15,6 +15,7 @@ import { PlusIcon, SearchIcon, SettingsIcon } from 'lucide-react';
 import { SessionNavItem } from '@/components/molecules/SessionNavItem';
 import { LoadingSpinner } from '@/components/atoms/LoadingSpinner';
 import { useUIStore } from '@/store/ui.store';
+import { useSessionStore } from '@/store/session.store';
 import { useSessionList } from '@/hooks/use-session-list';
 import { useSettingsStore } from '@/store/settings.store';
 import { cn } from '@/lib/utils';
@@ -28,6 +29,8 @@ export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { sidebarOpen, setSidebarOpen, setPendingAutoAdd } = useUIStore();
+  const setSession = useSessionStore((s) => s.setSession);
+  const setThreads = useSessionStore((s) => s.setThreads);
   const { sessions, loading, search, setSearch, createSession, deleteSession, renameSession } = useSessionList();
   const autoAddProviders = useSettingsStore((s) => s.autoAddProviders);
   const defaultModelIds = Object.values(autoAddProviders);
@@ -63,10 +66,19 @@ export function Sidebar() {
     setDialogOpen(false);
     try {
       const session = await createSession(name);
-      // Store model IDs in UIStore BEFORE navigation — read by SessionWorkspace on mount.
-      // This is more reliable than ?autoAdd=1 URL param (no server roundtrip, no timing gap).
+      // Seed the session store directly from the POST response so the new
+      // session workspace renders instantly — no second GET round-trip
+      // required. A freshly-created session has no threads, so we seed an
+      // empty thread list as well. useSession sees the store is already
+      // populated and skips its initial fetch.
+      setSession(session);
+      setThreads([]);
+      // Queue the auto-add for THIS specific session id. SessionWorkspace will
+      // only consume the queue when its mounted sessionId matches `session.id`,
+      // so the previously-open session can't accidentally pick it up between
+      // the Zustand state change and Next.js finishing navigation.
       if (defaultModelIds.length > 0) {
-        setPendingAutoAdd(defaultModelIds);
+        setPendingAutoAdd({ sessionId: session.id, modelIds: defaultModelIds });
       }
       router.push(`/sessions/${session.id}`);
     } catch (err) {

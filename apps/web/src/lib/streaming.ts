@@ -49,52 +49,66 @@ export async function streamPrompt(
   }
 
   const reader = res.body.getReader();
+  // Cancel the reader as soon as the caller aborts so we don't sit blocked
+  // in reader.read() waiting for the next chunk that will never arrive.
+  const onAbort = (): void => {
+    reader.cancel().catch(() => undefined);
+  };
+  signal?.addEventListener('abort', onAbort);
+
   const decoder = new TextDecoder();
   let buffer = '';
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
+      buffer += decoder.decode(value, { stream: true });
 
-    // Split on double-newline (SSE event boundary)
-    const parts = buffer.split('\n\n');
-    buffer = parts.pop() ?? '';
+      // Split on double-newline (SSE event boundary)
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() ?? '';
 
-    for (const part of parts) {
-      const lines = part.split('\n');
-      let eventName = '';
-      let dataLine = '';
+      for (const part of parts) {
+        const lines = part.split('\n');
+        let eventName = '';
+        let dataLine = '';
 
-      for (const line of lines) {
-        if (line.startsWith('event: ')) eventName = line.slice(7).trim();
-        if (line.startsWith('data: ')) dataLine = line.slice(6).trim();
-      }
+        for (const line of lines) {
+          if (line.startsWith('event: ')) eventName = line.slice(7).trim();
+          if (line.startsWith('data: ')) dataLine = line.slice(6).trim();
+        }
 
-      if (!eventName || !dataLine) continue;
+        if (!eventName || !dataLine) continue;
 
-      if (eventName === 'done') {
-        callbacks.onDone();
-        continue;
-      }
+        if (eventName === 'done') {
+          callbacks.onDone();
+          continue;
+        }
 
-      let data: StreamData;
-      try {
-        data = JSON.parse(dataLine) as StreamData;
-      } catch {
-        continue;
-      }
+        let data: StreamData;
+        try {
+          data = JSON.parse(dataLine) as StreamData;
+        } catch {
+          continue;
+        }
 
-      const threadId = eventName;
+        const threadId = eventName;
 
-      if (data.type === 'token') {
-        callbacks.onToken(threadId, data.token);
-      } else if (data.type === 'end') {
-        callbacks.onEnd(threadId, data.messageId);
-      } else if (data.type === 'error') {
-        callbacks.onError(threadId, data.message);
+        if (data.type === 'token') {
+          callbacks.onToken(threadId, data.token);
+        } else if (data.type === 'end') {
+          callbacks.onEnd(threadId, data.messageId);
+        } else if (data.type === 'error') {
+          callbacks.onError(threadId, data.message);
+        }
       }
     }
+  } finally {
+    // Always release the lock so the stream is reclaimable by GC, and
+    // detach the abort listener regardless of how we exited the loop.
+    signal?.removeEventListener('abort', onAbort);
+    reader.releaseLock();
   }
 }

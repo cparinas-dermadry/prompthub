@@ -7,15 +7,19 @@ import type { Session, Thread, Message, ProviderConfig } from '@prompthub/types'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
-type GetToken = () => Promise<string | null>;
+// Matches Clerk's `getToken` signature so existing call sites continue to
+// pass useAuth().getToken directly. Optional `skipCache` lets us force a
+// fresh token after a 401.
+type GetToken = (options?: { skipCache?: boolean }) => Promise<string | null>;
 
-async function request<T>(
+async function doFetch(
   getToken: GetToken,
   path: string,
-  options: RequestInit = {},
-): Promise<T> {
-  const token = await getToken();
-  const res = await fetch(`${API_URL}${path}`, {
+  options: RequestInit,
+  skipCache: boolean,
+): Promise<globalThis.Response> {
+  const token = await getToken({ skipCache });
+  return fetch(`${API_URL}${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -23,6 +27,21 @@ async function request<T>(
       ...(options.headers as Record<string, string> | undefined),
     },
   });
+}
+
+async function request<T>(
+  getToken: GetToken,
+  path: string,
+  options: RequestInit = {},
+): Promise<T> {
+  let res = await doFetch(getToken, path, options, false);
+
+  // Clerk tokens default to ~60s lifetime. On idle tabs the cached token
+  // expires; the backend then returns 401. Refetch with skipCache and try
+  // exactly once more before giving up.
+  if (res.status === 401) {
+    res = await doFetch(getToken, path, options, true);
+  }
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');

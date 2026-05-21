@@ -95,14 +95,30 @@ export class StreamingService {
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
 
-    // Fan out — fire all model requests concurrently, don't await all
-    await Promise.allSettled(
-      threads.map((thread: Thread) => this.streamThread(thread, prompt, userId, res)),
-    );
+    // When the client disconnects, abort every in-flight OpenRouter request
+    // so we stop burning credits/tokens for output nobody will ever see.
+    // Each streamThread also persists whatever it accumulated up to that
+    // point, so the user's history isn't lost on a flaky tab close.
+    const abortController = new AbortController();
+    const onClose = (): void => abortController.abort();
+    res.req.on('close', onClose);
 
-    // Signal all streams are done
-    res.write('event: done\ndata: {}\n\n');
-    res.end();
+    try {
+      // Fan out — fire all model requests concurrently, don't await all
+      await Promise.allSettled(
+        threads.map((thread: Thread) =>
+          this.streamThread(thread, prompt, userId, res, abortController.signal),
+        ),
+      );
+
+      // Only emit the done event if the client is still listening
+      if (!res.req.destroyed) {
+        res.write('event: done\ndata: {}\n\n');
+        res.end();
+      }
+    } finally {
+      res.req.off('close', onClose);
+    }
   }
 
   private async streamThread(
@@ -110,8 +126,12 @@ export class StreamingService {
     prompt: string,
     userId: string,
     res: Response,
+    clientAbort: AbortSignal,
   ): Promise<void> {
     const { id: threadId, model_id: modelId, model_config: modelConfig } = thread;
+    // Accumulator is declared outside the try so the catch/finally can
+    // persist whatever we received before an abort/error.
+    let fullContent = '';
 
     // Transparently migrate retired model IDs
     const resolvedModelId = MODEL_MIGRATIONS[modelId] ?? modelId;
@@ -124,17 +144,21 @@ export class StreamingService {
         .eq('id', threadId);
     }
 
-    // Load conversation history
+    // Load conversation history — most recent 40 messages, oldest first.
+    // We order DESC + limit so Postgres can use the (thread_id, timestamp)
+    // index and avoid sorting the full table, then reverse client-side so
+    // the LLM receives them in chronological order.
     const { data: history } = await this.supabase.db
       .from('messages')
       .select('role, content')
       .eq('thread_id', threadId)
-      .order('timestamp', { ascending: true })
-      .limit(40); // keep context window manageable
+      .order('timestamp', { ascending: false })
+      .limit(40);
 
-    const messages: Message[] = [
-      ...(history ?? []).map((m: Message) => ({ role: m.role, content: m.content })),
-    ];
+    const messages: Message[] = (history ?? [])
+      .slice()
+      .reverse()
+      .map((m: Message) => ({ role: m.role, content: m.content }));
 
     // Look up model config for BYOK routing and validation
     const modelConfig_ = PROVIDER_REGISTRY.find((p) => p.id === resolvedModelId);
@@ -161,9 +185,12 @@ export class StreamingService {
       // Retry up to 3 times on 429 or transient network errors (connect timeout, etc.)
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
+          // Combine the per-attempt timeout with the client-disconnect signal
+          // so closing the tab cancels in-flight fetches immediately.
+          const signal = AbortSignal.any([clientAbort, AbortSignal.timeout(90_000)]);
           response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
             method: 'POST',
-            signal: AbortSignal.timeout(90_000), // 90s total per attempt
+            signal,
             headers: {
               Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
               'Content-Type': 'application/json',
@@ -224,56 +251,111 @@ export class StreamingService {
 
       const reader = response!.body!.getReader();
       const decoder = new TextDecoder();
-      let fullContent = '';
       let buffer = '';
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      // Cancel the reader immediately on client disconnect — otherwise a
+      // slow LLM can leave us stuck in `await reader.read()` long after the
+      // client tab is gone. We attach AFTER the reader exists; if abort
+      // already fired in the small race window between fetch and here, the
+      // very first `if (clientAbort.aborted) break;` at loop top catches it.
+      const onClientAbort = (): void => {
+        reader.cancel().catch(() => undefined);
+      };
+      clientAbort.addEventListener('abort', onClientAbort);
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? ''; // keep incomplete line in buffer
+      try {
+        while (true) {
+          if (clientAbort.aborted) break;
+          const { done, value } = await reader.read();
+          if (done) break;
 
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const data = line.slice(6).trim();
-          if (data === '[DONE]') continue;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? ''; // keep incomplete line in buffer
 
-          try {
-            const parsed = JSON.parse(data) as {
-              choices?: Array<{ delta?: { content?: string } }>;
-            };
-            const token = parsed.choices?.[0]?.delta?.content;
-            if (token) {
-              fullContent += token;
-              this.writeEvent(res, threadId, { type: 'token', token });
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const data = line.slice(6).trim();
+            if (data === '[DONE]') continue;
+
+            try {
+              const parsed = JSON.parse(data) as {
+                choices?: Array<{ delta?: { content?: string } }>;
+              };
+              const token = parsed.choices?.[0]?.delta?.content;
+              if (token) {
+                fullContent += token;
+                this.writeEvent(res, threadId, { type: 'token', token });
+              }
+            } catch {
+              // malformed SSE line — skip
             }
-          } catch {
-            // malformed SSE line — skip
           }
         }
+      } finally {
+        // Always detach the listener and release the lock; cancel the
+        // underlying stream on abort so the upstream connection closes
+        // cleanly.
+        clientAbort.removeEventListener('abort', onClientAbort);
+        if (clientAbort.aborted) {
+          await reader.cancel().catch(() => undefined);
+        }
+        reader.releaseLock();
+      }
+
+      // If the client aborted mid-stream, persist whatever we have but skip
+      // the end event — the response is already closed.
+      if (clientAbort.aborted) {
+        await this.persistAssistantMessage(threadId, fullContent);
+        return;
       }
 
       // Save completed assistant message to Supabase
-      let savedMessageId: string | undefined;
-      if (fullContent) {
-        const { data: saved } = await this.supabase.db
-          .from('messages')
-          .insert({
-            thread_id: threadId,
-            role: 'assistant',
-            content: fullContent,
-          })
-          .select('id')
-          .single();
-        savedMessageId = saved?.id as string | undefined;
-      }
-
+      const savedMessageId = await this.persistAssistantMessage(threadId, fullContent);
       this.writeEvent(res, threadId, { type: 'end', messageId: savedMessageId });
     } catch (err) {
+      // Persist whatever streamed before the failure so the user keeps the
+      // partial answer even on network blips / mid-stream errors.
+      await this.persistAssistantMessage(threadId, fullContent);
+      const isAbort = (err as Error).name === 'AbortError' || clientAbort.aborted;
+      if (isAbort) {
+        this.logger.log(`Stream aborted for thread ${threadId} (client disconnect)`);
+        return;
+      }
       this.logger.error(`Stream error for thread ${threadId}:`, err);
       this.writeEvent(res, threadId, { type: 'error', message: 'Stream failed' });
+    }
+  }
+
+  /**
+   * Insert the assistant's accumulated content as a message, returning the
+   * new row's id (or undefined if there was nothing to save / the insert
+   * failed). Used by both the happy path and the abort/error paths so
+   * partial responses don't get lost.
+   */
+  private async persistAssistantMessage(
+    threadId: string,
+    content: string,
+  ): Promise<string | undefined> {
+    if (!content) return undefined;
+    try {
+      const { data: saved, error } = await this.supabase.db
+        .from('messages')
+        .insert({
+          thread_id: threadId,
+          role: 'assistant',
+          content,
+        })
+        .select('id')
+        .single();
+      if (error) {
+        this.logger.error(`Failed to persist assistant message: ${error.message}`);
+        return undefined;
+      }
+      return saved?.id as string | undefined;
+    } catch (err) {
+      this.logger.error(`Failed to persist assistant message:`, err);
+      return undefined;
     }
   }
 
