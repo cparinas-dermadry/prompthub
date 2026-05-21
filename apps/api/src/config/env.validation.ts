@@ -15,6 +15,10 @@ const REQUIRED_ENV_VARS = [
   'CLERK_SECRET_KEY',
   'SUPABASE_URL',
   'SUPABASE_SERVICE_ROLE_KEY',
+  // Required even in Phase 1 of the RLS rollout: the new UserSupabaseService
+  // needs the anon key to build per-request user-scoped clients. Service-role
+  // is still used for current routes, but the plumbing wants this on hand.
+  'SUPABASE_ANON_KEY',
   'OPENROUTER_API_KEY',
 ] as const;
 

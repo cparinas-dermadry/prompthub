@@ -57,7 +57,8 @@ export class SessionsService {
       .single();
 
     if (error) {
-      this.logger.error(`create failed: ${error.message}`);
+      this.logger.error(`create failed:`, error);
+      console.error('Full error cause:', (error as any)?.cause);
       throw new InternalServerErrorException('Database error');
     }
     return data;
