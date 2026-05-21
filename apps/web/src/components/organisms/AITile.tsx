@@ -44,11 +44,23 @@ export function AITile({ thread, mode = 'normal' }: AITileProps) {
   const isCompact = mode === 'minimized';
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Auto-scroll only when the user is already pinned to the bottom. If they
+  // scrolled up to read older content, don't yank them back. We sample
+  // wasAtBottom BEFORE the DOM updates so growing content doesn't lie about
+  // its previous position.
+  const wasAtBottomRef = useRef(true);
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    el.scrollTop = el.scrollHeight;
+    if (wasAtBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [messages.length, liveToken]);
+
+  function handleScroll(e: React.UIEvent<HTMLDivElement>): void {
+    const el = e.currentTarget;
+    // 32px slop so users don't have to land pixel-perfect to re-enable
+    // auto-scroll. Anything closer than that counts as "at the bottom".
+    wasAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 32;
+  }
 
   function handleCopy(content: string) {
     navigator.clipboard.writeText(content).catch(console.error);
@@ -108,7 +120,11 @@ export function AITile({ thread, mode = 'normal' }: AITileProps) {
         onRemove={handleRemove}
         onModelChange={handleModelChange}
       />
-      <div ref={scrollRef} className={isCompact ? 'flex-1 min-h-0 overflow-y-auto px-3 py-2' : 'flex-1 min-h-0 overflow-y-auto px-4 py-3'}>
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className={isCompact ? 'flex-1 min-h-0 overflow-y-auto px-3 py-2' : 'flex-1 min-h-0 overflow-y-auto px-4 py-3'}
+      >
         <div className={isCompact ? 'flex flex-col gap-1.5 text-[11px] leading-snug' : 'flex flex-col gap-3 text-sm'}>
           {isEmpty && status !== 'streaming' && (
             <p className="text-muted-fg text-xs text-center pt-6">Ask something to get started…</p>

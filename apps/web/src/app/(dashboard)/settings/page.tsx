@@ -31,8 +31,12 @@ function ModelOption({
       {model.free ? (
         <span className="text-xs text-teal font-medium">Free</span>
       ) : (
+        // costPer1kTokens is { input, output }. We display input cost since
+        // it's the more relevant price for chat-style usage (prompt-heavy).
+        // Previous code cast the object to `number` and multiplied by 1000 —
+        // that produced NaN and rendered as "$NaN/M".
         <span className="text-xs text-muted-foreground">
-          ${((model.costPer1kTokens as number) * 1000).toFixed(2)}/M
+          ${(model.costPer1kTokens.input * 1000).toFixed(2)}/M in
         </span>
       )}
       {/* Radio indicator */}

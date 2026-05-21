@@ -18,10 +18,16 @@ interface UIState {
   highlightsPanelOpen: boolean;
 
   /**
-   * Model IDs queued for auto-add when the next session workspace mounts.
-   * Set by Sidebar before navigating to a new session; cleared by SessionWorkspace after firing.
+   * Auto-add queue for a specific session. Set by Sidebar BEFORE navigating to a
+   * newly-created session; consumed by SessionWorkspace ONLY when its mounted
+   * sessionId matches `sessionId` here.
+   *
+   * Binding the payload to a target sessionId is intentional: without it, the
+   * effect inside the currently-mounted (previous-session) SessionWorkspace
+   * fires on the next render — before Next.js navigation finishes — and the
+   * auto-add ends up applied to the wrong session.
    */
-  pendingAutoAdd: string[];
+  pendingAutoAdd: { sessionId: string; modelIds: string[] } | null;
 
   // Actions
   expandThread: (id: string) => void;
@@ -32,7 +38,7 @@ interface UIState {
   toggleSidebar: () => void;
   setSidebarOpen: (open: boolean) => void;
   toggleHighlightsPanel: () => void;
-  setPendingAutoAdd: (ids: string[]) => void;
+  setPendingAutoAdd: (payload: { sessionId: string; modelIds: string[] }) => void;
   clearPendingAutoAdd: () => void;
 }
 
@@ -42,7 +48,7 @@ export const useUIStore = create<UIState>((set) => ({
   selectedProviderIds: [],
   sidebarOpen: false,
   highlightsPanelOpen: false,
-  pendingAutoAdd: [],
+  pendingAutoAdd: null,
 
   expandThread: (id) => set({ expandedThreadId: id }),
   collapseThread: () => set({ expandedThreadId: null }),
@@ -63,6 +69,6 @@ export const useUIStore = create<UIState>((set) => ({
 
   toggleHighlightsPanel: () => set((s) => ({ highlightsPanelOpen: !s.highlightsPanelOpen })),
 
-  setPendingAutoAdd: (ids) => set({ pendingAutoAdd: ids }),
-  clearPendingAutoAdd: () => set({ pendingAutoAdd: [] }),
+  setPendingAutoAdd: (payload) => set({ pendingAutoAdd: payload }),
+  clearPendingAutoAdd: () => set({ pendingAutoAdd: null }),
 }));

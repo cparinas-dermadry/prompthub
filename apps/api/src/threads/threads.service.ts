@@ -1,9 +1,16 @@
-import { Injectable, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service.js';
 import { CreateThreadDto, UpdateThreadDto } from './dto/thread.dto.js';
 
 @Injectable()
 export class ThreadsService {
+  private readonly logger = new Logger(ThreadsService.name);
+
   constructor(private readonly supabase: SupabaseService) {}
 
   async create(userId: string, dto: CreateThreadDto) {
@@ -38,7 +45,8 @@ export class ThreadsService {
     }
 
     if (insertResult.error) {
-      throw new InternalServerErrorException(`Failed to create thread: ${insertResult.error.message}`);
+      this.logger.error(`create failed: ${insertResult.error.message}`);
+      throw new InternalServerErrorException('Database error');
     }
 
     return insertResult.data;
@@ -60,15 +68,18 @@ export class ThreadsService {
     const { data, error } = await this.supabase.db
       .from('threads')
       .update({
-        model_id: dto.modelId,
-        display_name: dto.displayName,
-        ...(dto.modelConfig ? { model_config: dto.modelConfig } : {}),
+        ...(dto.modelId !== undefined && { model_id: dto.modelId }),
+        ...(dto.displayName !== undefined && { display_name: dto.displayName }),
+        ...(dto.modelConfig !== undefined && { model_config: dto.modelConfig }),
       })
       .eq('id', id)
       .select()
       .single();
 
-    if (error) throw new InternalServerErrorException(error.message);
+    if (error) {
+      this.logger.error(`update failed: ${error.message}`);
+      throw new InternalServerErrorException('Database error');
+    }
     return data;
   }
 
@@ -87,6 +98,9 @@ export class ThreadsService {
     if (sessionUserId !== userId) throw new NotFoundException('Thread not found');
 
     const { error } = await this.supabase.db.from('threads').delete().eq('id', id);
-    if (error) throw new Error(error.message);
+    if (error) {
+      this.logger.error(`remove failed: ${error.message}`);
+      throw new InternalServerErrorException('Database error');
+    }
   }
 }

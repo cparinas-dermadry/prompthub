@@ -1,4 +1,4 @@
-import { Controller, Post, Patch, Delete, Param, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Patch, Delete, Param, ParseUUIDPipe, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import { ThreadsService } from './threads.service.js';
 import { CreateThreadDto, UpdateThreadDto } from './dto/thread.dto.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
@@ -15,7 +15,7 @@ export class ThreadsController {
 
   @Patch(':id')
   update(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: { sub: string },
     @Body() dto: UpdateThreadDto,
   ) {
@@ -24,7 +24,7 @@ export class ThreadsController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  remove(@Param('id') id: string, @CurrentUser() user: { sub: string }) {
+  remove(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: { sub: string }) {
     return this.threadsService.remove(id, user.sub);
   }
 }

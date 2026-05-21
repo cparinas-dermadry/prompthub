@@ -18,6 +18,11 @@ export function HighlightsPanel() {
   const messages = useSessionStore((s) => s.messages);
   const { toggle: toggleBookmark } = useBookmark();
 
+  // Cheap to subscribe and bail early — skip the flatMap/sort entirely when
+  // the panel is closed. Previously the sort ran on every parent render even
+  // when the panel was hidden, including during streaming.
+  if (!highlightsPanelOpen) return null;
+
   const bookmarked = Object.entries(messages)
     .flatMap(([threadId, msgs]) =>
       msgs
@@ -28,8 +33,6 @@ export function HighlightsPanel() {
         })),
     )
     .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-
-  if (!highlightsPanelOpen) return null;
 
   return (
     <aside className="fixed inset-y-0 right-0 z-40 flex w-80 flex-col border-l border-divider bg-white shadow-xl">

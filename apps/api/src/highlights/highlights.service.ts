@@ -1,8 +1,15 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service.js';
 
 @Injectable()
 export class HighlightsService {
+  private readonly logger = new Logger(HighlightsService.name);
+
   constructor(private readonly supabase: SupabaseService) {}
 
   async toggleBookmark(messageId: string, userId: string) {
@@ -28,7 +35,10 @@ export class HighlightsService {
       .select('id, is_bookmarked')
       .single();
 
-    if (error) throw new Error(error.message);
+    if (error) {
+      this.logger.error(`toggleBookmark failed: ${error.message}`);
+      throw new InternalServerErrorException('Database error');
+    }
     return data;
   }
 
@@ -50,7 +60,10 @@ export class HighlightsService {
       .eq('is_bookmarked', true)
       .order('timestamp', { ascending: true });
 
-    if (error) throw new Error(error.message);
+    if (error) {
+      this.logger.error(`getHighlights failed: ${error.message}`);
+      throw new InternalServerErrorException('Database error');
+    }
     return data ?? [];
   }
 }
