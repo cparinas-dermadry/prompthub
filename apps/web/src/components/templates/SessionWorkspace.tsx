@@ -8,6 +8,7 @@ import { TileGrid } from '@/components/organisms/TileGrid';
 import { PromptInput } from '@/components/organisms/PromptInput';
 import { HighlightsPanel } from '@/components/organisms/HighlightsPanel';
 import { ProviderSelector } from '@/components/organisms/ProviderSelector';
+import { RetryFailedPill } from '@/components/molecules/RetryFailedPill';
 import { useSession } from '@/hooks/use-session';
 import { useAddThreads } from '@/hooks/use-add-threads';
 import { useSessionStore } from '@/store/session.store';
@@ -122,6 +123,9 @@ export function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
           <PlusCircleIcon className="h-4 w-4" />
           {adding ? 'Adding…' : 'Add Models'}
         </Button>
+        <div className="ml-auto">
+          <RetryFailedPill sessionId={sessionId} />
+        </div>
       </div>
 
       {/* Tile area + prompt input */}

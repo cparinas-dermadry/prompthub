@@ -4,13 +4,19 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { SupabaseService } from '../supabase/supabase.service.js';
+import { UserSupabaseService } from '../supabase/user-supabase.service.js';
 
+/**
+ * Phase 2: uses UserSupabaseService — the two-level-deep RLS policy on
+ * `messages` (message → thread → session → user) does the heavy lifting.
+ * The explicit ownership checks below remain so an RLS policy bug can't
+ * silently expose other users' bookmarks.
+ */
 @Injectable()
 export class HighlightsService {
   private readonly logger = new Logger(HighlightsService.name);
 
-  constructor(private readonly supabase: SupabaseService) {}
+  constructor(private readonly supabase: UserSupabaseService) {}
 
   async toggleBookmark(messageId: string, userId: string) {
     // Verify ownership: message → thread → session → user

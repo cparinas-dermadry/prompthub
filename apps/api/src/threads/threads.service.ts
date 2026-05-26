@@ -4,14 +4,22 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { SupabaseService } from '../supabase/supabase.service.js';
+import { UserSupabaseService } from '../supabase/user-supabase.service.js';
 import { CreateThreadDto, UpdateThreadDto } from './dto/thread.dto.js';
 
+/**
+ * Phase 2: uses UserSupabaseService — RLS now gates every query via the
+ * caller's Clerk JWT. The `threads_*_own` policies cascade ownership through
+ * the parent session, so even if a malicious client crafts a `sessionId`
+ * belonging to another user, the INSERT/UPDATE will be rejected at the DB
+ * level by the WITH CHECK clause. The explicit ownership checks below are
+ * kept as defense in depth.
+ */
 @Injectable()
 export class ThreadsService {
   private readonly logger = new Logger(ThreadsService.name);
 
-  constructor(private readonly supabase: SupabaseService) {}
+  constructor(private readonly supabase: UserSupabaseService) {}
 
   async create(userId: string, dto: CreateThreadDto) {
     // Run the ownership check and the INSERT in parallel to halve latency.

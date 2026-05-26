@@ -30,15 +30,63 @@ export async function streamPrompt(
   callbacks: StreamCallbacks,
   signal?: AbortSignal,
 ): Promise<void> {
+  return postAndParseSSE(getToken, '/streaming/prompt', payload, callbacks, signal);
+}
+
+/**
+ * Re-stream one or more threads using their existing last user message
+ * (optionally rewritten via `edits`). The server-side endpoint cleans up any
+ * trailing assistant message before re-streaming, so callers should clear
+ * their local partial/errored assistant state for the affected threads
+ * before invoking this.
+ */
+export interface RetryOverride {
+  threadId: string;
+  /**
+   * Message ID of the user message to retry FROM. If omitted, the latest
+   * user message in the thread is used. When provided, the server deletes
+   * every message timestamped after this one (both user and assistant)
+   * before re-streaming — the "rewind to turn N" case.
+   */
+  fromMessageId?: string;
+  /**
+   * New content for the user message at `fromMessageId` (or the latest user
+   * message). If omitted, the existing content is reused verbatim — the
+   * "pure retry, no edit" case.
+   */
+  prompt?: string;
+}
+
+export async function retryPrompt(
+  getToken: () => Promise<string | null>,
+  payload: {
+    sessionId: string;
+    threadIds: string[];
+    /** Per-thread overrides — threads not listed retry verbatim from their latest user message. */
+    edits?: RetryOverride[];
+  },
+  callbacks: StreamCallbacks,
+  signal?: AbortSignal,
+): Promise<void> {
+  return postAndParseSSE(getToken, '/streaming/retry', payload, callbacks, signal);
+}
+
+async function postAndParseSSE(
+  getToken: () => Promise<string | null>,
+  path: string,
+  body: object,
+  callbacks: StreamCallbacks,
+  signal?: AbortSignal,
+): Promise<void> {
   const token = await getToken();
 
-  const res = await fetch(`${API_URL}/streaming/prompt`, {
+  const res = await fetch(`${API_URL}${path}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
     signal,
   });
 
