@@ -5,12 +5,16 @@ import {
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import { verifyToken } from '@clerk/backend';
 import type { Request } from 'express';
+import { IS_PUBLIC_KEY } from './public.decorator.js';
 
 @Injectable()
 export class ClerkGuard implements CanActivate {
   private readonly logger = new Logger(ClerkGuard.name);
+
+  constructor(private readonly reflector: Reflector) {}
 
   /**
    * Comma-separated frontend origins allowed to obtain JWTs for this API.
@@ -32,6 +36,17 @@ export class ClerkGuard implements CanActivate {
   private readonly issuer: string | undefined = process.env['CLERK_ISSUER_URL']?.trim();
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
+    // Bypass auth entirely for routes marked with @Public(). This is used by
+    // the unauthenticated /health endpoint that Render's health checks and
+    // the UptimeRobot keep-alive pinger hit every 5 minutes.
+    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (isPublic) {
+      return true;
+    }
+
     const request = context.switchToHttp().getRequest<Request>();
     const authHeader = request.headers['authorization'];
 
