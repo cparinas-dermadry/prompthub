@@ -2,12 +2,16 @@
 
 import { useEffect, useRef } from 'react';
 import { useAuth } from '@clerk/nextjs';
+import { Button } from '@/components/ui/button';
+import { RefreshCwIcon } from 'lucide-react';
 import { ThreadHeader } from '@/components/molecules/ThreadHeader';
 import { MessageBubble } from '@/components/molecules/MessageBubble';
+import { UserBubble } from '@/components/molecules/UserBubble';
 import { StreamingCursor } from '@/components/atoms/StreamingCursor';
 import { useSessionStore } from '@/store/session.store';
 import { useUIStore } from '@/store/ui.store';
 import { useBookmark } from '@/hooks/use-bookmark';
+import { useStreaming } from '@/hooks/use-streaming';
 import { deleteThread, updateThread } from '@/lib/api';
 import type { Thread } from '@prompthub/types';
 
@@ -30,6 +34,12 @@ export function AITile({ thread, mode = 'normal' }: AITileProps) {
   const { removeThread, replaceThread } = useSessionStore();
   const { expandedThreadId, expandThread, collapseThread, providers } = useUIStore();
   const { toggle: toggleBookmark, pending } = useBookmark();
+  // Per-tile retry — each AITile owns its own streaming hook instance so
+  // retries on different tiles don't share an abort controller. The
+  // tradeoff is that PromptInput's hook can't observe this stream, but
+  // that's fine: the global send-button is disabled while any tile is
+  // streaming via the per-thread `status` already tracked in the store.
+  const { isStreaming: isRetrying, retry } = useStreaming(thread.session_id);
 
   const accentColor =
     (thread.model_config as Record<string, string> | null)?.logoColor ?? '#7c3aed';
@@ -49,10 +59,17 @@ export function AITile({ thread, mode = 'normal' }: AITileProps) {
   // wasAtBottom BEFORE the DOM updates so growing content doesn't lie about
   // its previous position.
   const wasAtBottomRef = useRef(true);
+  const rafRef = useRef<number | null>(null);
   useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    if (wasAtBottomRef.current) el.scrollTop = el.scrollHeight;
+    if (!wasAtBottomRef.current) return;
+    // Deduplicate multiple state updates within the same animation frame
+    if (rafRef.current !== null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      if (scrollRef.current && wasAtBottomRef.current) {
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      }
+    });
   }, [messages.length, liveToken]);
 
   function handleScroll(e: React.UIEvent<HTMLDivElement>): void {
@@ -65,6 +82,44 @@ export function AITile({ thread, mode = 'normal' }: AITileProps) {
   function handleCopy(content: string) {
     navigator.clipboard.writeText(content).catch(console.error);
   }
+
+  // Retry handlers — each accepts the messageId of the user bubble being
+  // retried. If it's the latest user message, behavior matches the original
+  // "retry the last turn" case. If it's an older message, the server (and
+  // local optimistic update) silently delete every message timestamped
+  // after it before re-streaming.
+  function handleRetry(messageId: string) {
+    if (thread.id.startsWith('temp-')) return;
+    void retry([thread.id], [{ threadId: thread.id, fromMessageId: messageId }]);
+  }
+
+  function handleEditAndRetry(messageId: string, newPrompt: string) {
+    if (thread.id.startsWith('temp-')) return;
+    void retry([thread.id], [
+      { threadId: thread.id, fromMessageId: messageId, prompt: newPrompt },
+    ]);
+  }
+
+  // The empty/error-state CTA always retries from the latest user message,
+  // so we precompute its index here. The per-bubble hover icons each retry
+  // from their own bubble (any turn), so they don't need this.
+  let lastUserIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') {
+      lastUserIdx = i;
+      break;
+    }
+  }
+  const latestUserMessageId = lastUserIdx >= 0 ? messages[lastUserIdx].id : null;
+  // Show the prominent error-state retry CTA when the stream failed OR
+  // when the last message is a user message with no assistant follow-up
+  // (which usually means an error happened before any tokens streamed).
+  const lastMessage = messages[messages.length - 1];
+  const needsRetryCta =
+    !thread.id.startsWith('temp-') &&
+    status !== 'streaming' &&
+    !isRetrying &&
+    (status === 'error' || (lastMessage?.role === 'user' && !liveToken));
 
   async function handleRemove() {
     // Optimistic: remove from store immediately
@@ -130,17 +185,22 @@ export function AITile({ thread, mode = 'normal' }: AITileProps) {
             <p className="text-muted-fg text-xs text-center pt-6">Ask something to get started…</p>
           )}
 
-          {messages.map((msg) =>
+          {messages.map((msg, idx) =>
             msg.role === 'user' ? (
-              <div key={msg.id} className="flex justify-end">
-                <div
-                  className={isCompact
-                    ? 'max-w-[92%] whitespace-pre-wrap rounded-xl rounded-tr-sm bg-slate-100 px-2 py-1 text-[11px] leading-snug text-body'
-                    : 'max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-tr-sm bg-slate-100 px-3.5 py-2 text-sm text-body'}
-                >
-                  {msg.content}
-                </div>
-              </div>
+              <UserBubble
+                key={msg.id}
+                messageId={msg.id}
+                content={msg.content}
+                // Every user bubble is retryable. Retrying an older turn
+                // silently invalidates subsequent turns — UserBubble
+                // surfaces "Rewind & retry from here" labeling for those.
+                showActions
+                isHistorical={idx !== lastUserIdx}
+                disabled={isRetrying || status === 'streaming'}
+                onRetry={handleRetry}
+                onEditSave={handleEditAndRetry}
+                compact={isCompact}
+              />
             ) : (
               <MessageBubble
                 key={msg.id}
@@ -172,8 +232,23 @@ export function AITile({ thread, mode = 'normal' }: AITileProps) {
             </div>
           )}
 
-          {status === 'error' && (
-            <p className="text-xs text-danger">Error receiving response.</p>
+          {needsRetryCta && latestUserMessageId && (
+            <div className="flex flex-col items-center gap-2 py-3">
+              {status === 'error' && (
+                <p className="text-xs text-danger text-center">
+                  Error receiving response.
+                </p>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1.5 text-xs border-divider"
+                onClick={() => handleRetry(latestUserMessageId)}
+              >
+                <RefreshCwIcon className="h-3.5 w-3.5" />
+                Retry this model
+              </Button>
+            </div>
           )}
 
         </div>

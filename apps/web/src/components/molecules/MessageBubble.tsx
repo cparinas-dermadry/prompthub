@@ -1,5 +1,6 @@
 'use client';
 
+import { memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Button } from '@/components/ui/button';
@@ -20,7 +21,7 @@ interface MessageBubbleProps {
  * Molecule: a single assistant message with hover-reveal action toolbar.
  * Receives callbacks — no side-effects inside this component (ISP + DIP).
  */
-export function MessageBubble({ message, onBookmark, onCopy, isPending, compact = false }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, onBookmark, onCopy, isPending, compact = false }: MessageBubbleProps) {
   return (
     <div className="group relative">
       <div
@@ -81,4 +82,4 @@ export function MessageBubble({ message, onBookmark, onCopy, isPending, compact 
       </div>
     </div>
   );
-}
+});

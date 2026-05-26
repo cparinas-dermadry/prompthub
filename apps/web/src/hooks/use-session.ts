@@ -61,7 +61,12 @@ export function useSession(sessionId: string) {
           for (const thread of threads) {
             const msgs = ((thread as unknown) as { messages?: Message[] }).messages;
             if (Array.isArray(msgs) && msgs.length > 0) {
-              setMessages(thread.id, msgs);
+              const sorted = [...msgs].sort(
+                (a, b) =>
+                  new Date((a as unknown as { timestamp: string }).timestamp).getTime() -
+                  new Date((b as unknown as { timestamp: string }).timestamp).getTime(),
+              );
+              setMessages(thread.id, sorted);
             }
           }
         }

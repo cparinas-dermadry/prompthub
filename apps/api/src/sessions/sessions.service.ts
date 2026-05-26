@@ -4,14 +4,24 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { SupabaseService } from '../supabase/supabase.service.js';
+import { UserSupabaseService } from '../supabase/user-supabase.service.js';
 import { CreateSessionDto, UpdateSessionDto } from './dto/session.dto.js';
 
+/**
+ * Phase 2: now uses UserSupabaseService — every query runs UNDER RLS, gated
+ * by the caller's Clerk JWT (`auth.jwt()->>'sub'`). The `.eq('user_id', userId)`
+ * filters remain as defense in depth so a future RLS policy bug can't leak
+ * data across tenants.
+ *
+ * Because UserSupabaseService is request-scoped, this service is now
+ * request-scoped too (NestJS scope cascading). That's expected; the per-
+ * request allocation is negligible.
+ */
 @Injectable()
 export class SessionsService {
   private readonly logger = new Logger(SessionsService.name);
 
-  constructor(private readonly supabase: SupabaseService) {}
+  constructor(private readonly supabase: UserSupabaseService) {}
 
   async findAll(userId: string, search?: string) {
     let query = this.supabase.db

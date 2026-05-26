@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { Response } from 'express';
-import { SupabaseService } from '../supabase/supabase.service.js';
+import { UserSupabaseService } from '../supabase/user-supabase.service.js';
 import { PROVIDER_REGISTRY } from '../providers/provider-config.js';
 
 /**
@@ -8,25 +8,49 @@ import { PROVIDER_REGISTRY } from '../providers/provider-config.js';
  * Applied transparently before every OpenRouter call and persisted to the DB.
  */
 const MODEL_MIGRATIONS: Record<string, string> = {
+  // ── Anthropic ──────────────────────────────────────────────────────────────
   // Hyphen vs dot — OpenRouter uses dot notation for 4.x models
   'anthropic/claude-sonnet-4-5': 'anthropic/claude-sonnet-4.5',
   // Legacy Anthropic names
   'anthropic/claude-lite': 'anthropic/claude-haiku-4.5',
   // claude-3.5-haiku has no Anthropic direct provider on OpenRouter (only amazon-bedrock/google-vertex)
   'anthropic/claude-3.5-haiku': 'anthropic/claude-haiku-4.5',
-  // Google — gemini-2.0-flash-001 retiring June 1 2026; gemini-1.5 family deprecated
+  // Removed from registry on 2026-05-26 — point at current Sonnet
+  'anthropic/claude-sonnet-4': 'anthropic/claude-sonnet-4.6',
+  // Removed — point at current Opus
+  'anthropic/claude-opus-4': 'anthropic/claude-opus-4.6',
+  // Never existed on OpenRouter despite being in our old registry
+  'anthropic/claude-opus-4.7-fast': 'anthropic/claude-opus-4.6',
+
+  // ── Google ─────────────────────────────────────────────────────────────────
+  // gemini-2.0-flash-001 retiring June 1 2026; gemini-1.5 family deprecated
   'google/gemini-2.0-flash-001': 'google/gemini-3.5-flash',
-  'google/gemini-1.5-pro': 'google/gemini-2.5-pro',
-  'google/gemini-1.5-pro-002': 'google/gemini-2.5-pro',
+  'google/gemini-2.5-pro': 'google/gemini-3.1-pro-preview',
+  'google/gemini-1.5-pro': 'google/gemini-3.1-pro-preview',
+  'google/gemini-1.5-pro-002': 'google/gemini-3.1-pro-preview',
   'google/gemini-1.5-flash': 'google/gemini-3.5-flash',
   'google/gemini-1.5-flash-002': 'google/gemini-3.5-flash',
   'google/gemini-pro': 'google/gemini-3.5-flash',
-  // DeepSeek
+
+  // ── OpenAI ─────────────────────────────────────────────────────────────────
+  // GPT-4o family retired from registry on 2026-05-26
+  'openai/gpt-4o': 'openai/gpt-5.1',
+  'openai/gpt-4o-mini': 'openai/gpt-5-mini',
+
+  // ── xAI ────────────────────────────────────────────────────────────────────
+  // Grok-2 retired from registry on 2026-05-26
+  'x-ai/grok-2': 'x-ai/grok-4.3',
+  'x-ai/grok-2-1212': 'x-ai/grok-4.3',
+  'x-ai/grok-3': 'x-ai/grok-4.3',
+  // Grok-4 deprecated by xAI on 2026-05-26 (OpenRouter returns 404 with redirect notice)
+  'x-ai/grok-4': 'x-ai/grok-4.3',
+
+  // ── DeepSeek ───────────────────────────────────────────────────────────────
   'deepseek/deepseek-r1:free': 'deepseek/deepseek-v4-flash:free',
   'deepseek/deepseek-chat-v3-0324:free': 'deepseek/deepseek-v4-flash:free',
-  // Google open models
+
+  // ── Open models ────────────────────────────────────────────────────────────
   'google/gemma-3-12b-it:free': 'google/gemma-4-31b-it:free',
-  // Mistral
   'mistralai/mistral-7b-instruct:free': 'meta-llama/llama-3.3-70b-instruct:free',
 };
 
@@ -41,11 +65,34 @@ interface Message {
   content: string;
 }
 
+/**
+ * Phase 2 notes for this service specifically:
+ *
+ * StreamingService is the one with the most exotic async lifecycle — fanOut
+ * holds an open SSE connection for many seconds while N parallel
+ * streamThread tasks read from OpenRouter, write SSE events, and (on
+ * abort or error) call persistAssistantMessage to save partial content.
+ *
+ * Because UserSupabaseService is request-scoped, this whole chain is now
+ * request-scoped. The request-scoped instance lives until the controller
+ * promise resolves (i.e. until res.end() returns and `sendPrompt` exits),
+ * so:
+ *   - the user-message INSERT before streaming starts uses the live client,
+ *   - each streamThread's persistAssistantMessage at success/abort/error
+ *     time also uses the same live client,
+ *   - on client disconnect, the abort handler fires inside the controller's
+ *     promise — still within the request lifecycle — so persistence still
+ *     works under RLS.
+ *
+ * If we ever detach work to run AFTER the controller returns (e.g. a true
+ * fire-and-forget background save), we'd need a different strategy because
+ * request-scoped services are torn down once the response is sent.
+ */
 @Injectable()
 export class StreamingService {
   private readonly logger = new Logger(StreamingService.name);
 
-  constructor(private readonly supabase: SupabaseService) {}
+  constructor(private readonly supabase: UserSupabaseService) {}
 
   async fanOut(
     sessionId: string,
@@ -54,32 +101,14 @@ export class StreamingService {
     userId: string,
     res: Response,
   ): Promise<void> {
-    // Verify session ownership
-    const { data: session } = await this.supabase.db
-      .from('sessions')
-      .select('id')
-      .eq('id', sessionId)
-      .eq('user_id', userId)
-      .single();
-
-    if (!session) {
+    const threads = await this.loadOwnedThreads(sessionId, threadIds, userId);
+    if (!threads) {
       res.status(404).end();
       return;
     }
 
-    // Load threads
-    const { data: threads } = await this.supabase.db
-      .from('threads')
-      .select('id, model_id, model_config')
-      .in('id', threadIds)
-      .eq('session_id', sessionId);
-
-    if (!threads || threads.length === 0) {
-      res.status(404).end();
-      return;
-    }
-
-    // Save user message to all threads
+    // Save user message to all threads — only fan-out does this; retry
+    // reuses the existing last user message instead.
     await this.supabase.db.from('messages').insert(
       threads.map((t: Thread) => ({
         thread_id: t.id,
@@ -88,7 +117,178 @@ export class StreamingService {
       })),
     );
 
-    // Set SSE headers
+    await this.runStreams(threads, prompt, () => undefined, userId, res);
+  }
+
+  /**
+   * Re-stream one or more threads from a specific turn.
+   *
+   * For each thread:
+   *  1. Resolve the rewind point: either the explicit `fromMessageId` override
+   *     or, if not given, the latest user message in the thread.
+   *  2. If an edited prompt was supplied, update that user message's content.
+   *  3. Delete every message timestamped AFTER the rewind point — both user
+   *     AND assistant. This is the "silent invalidation" of subsequent turns
+   *     when the user retries an earlier turn (matches ChatGPT/Claude.ai UX).
+   *  4. Re-stream via the existing streamThread machinery, which loads
+   *     history from the DB (now truncated at the rewind point + edited).
+   *
+   * Called by POST /streaming/retry. Does NOT insert a new user message.
+   */
+  async retryThreads(
+    sessionId: string,
+    threadIds: string[],
+    overrides: Map<string, { prompt?: string; fromMessageId?: string }>,
+    userId: string,
+    res: Response,
+  ): Promise<void> {
+    const threads = await this.loadOwnedThreads(sessionId, threadIds, userId);
+    if (!threads) {
+      res.status(404).end();
+      return;
+    }
+
+    const retryableThreadIds = new Set<string>();
+
+    for (const thread of threads) {
+      const override = overrides.get(thread.id);
+      const rewindPoint = await this.resolveRewindPoint(thread.id, override?.fromMessageId);
+
+      if (!rewindPoint) {
+        this.logger.warn(
+          `Retry requested for thread ${thread.id} but no valid rewind point — skipping`,
+        );
+        continue;
+      }
+
+      // Apply edited prompt to the rewind-point user message if supplied
+      if (
+        override?.prompt !== undefined &&
+        override.prompt !== rewindPoint.content
+      ) {
+        await this.supabase.db
+          .from('messages')
+          .update({ content: override.prompt })
+          .eq('id', rewindPoint.id);
+      }
+
+      // Wipe everything that came AFTER the rewind point. This deletes both
+      // subsequent user messages AND assistant messages — the user-facing
+      // semantic is "retrying turn N invalidates turns N+1, N+2, ...".
+      // gt() on timestamp is safe: timestamps are monotonic per-thread.
+      await this.supabase.db
+        .from('messages')
+        .delete()
+        .eq('thread_id', thread.id)
+        .gt('timestamp', rewindPoint.timestamp);
+
+      retryableThreadIds.add(thread.id);
+    }
+
+    if (retryableThreadIds.size === 0) {
+      res
+        .status(400)
+        .json({ error: 'No retryable threads (no valid rewind point found)' });
+      return;
+    }
+
+    const retryable = threads.filter((t) => retryableThreadIds.has(t.id));
+    await this.runStreams(retryable, '', () => undefined, userId, res);
+  }
+
+  /**
+   * Resolve which user message is the rewind point for a retry.
+   *
+   * If `fromMessageId` is provided, validate that it exists, belongs to this
+   * thread, and is role='user' — return it. Otherwise (or if invalid), fall
+   * back to the latest user message in the thread. Returns null if the
+   * thread has no user messages at all.
+   */
+  private async resolveRewindPoint(
+    threadId: string,
+    fromMessageId: string | undefined,
+  ): Promise<{ id: string; content: string; timestamp: string } | null> {
+    if (fromMessageId) {
+      const { data: explicit } = await this.supabase.db
+        .from('messages')
+        .select('id, content, timestamp, role, thread_id')
+        .eq('id', fromMessageId)
+        .maybeSingle();
+
+      if (explicit && explicit.thread_id === threadId && explicit.role === 'user') {
+        return {
+          id: explicit.id as string,
+          content: explicit.content as string,
+          timestamp: explicit.timestamp as string,
+        };
+      }
+      this.logger.warn(
+        `Invalid fromMessageId ${fromMessageId} for thread ${threadId} (wrong thread, wrong role, or missing). Falling back to latest user message.`,
+      );
+    }
+
+    const { data: latest } = await this.supabase.db
+      .from('messages')
+      .select('id, content, timestamp')
+      .eq('thread_id', threadId)
+      .eq('role', 'user')
+      .order('timestamp', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!latest) return null;
+    return {
+      id: latest.id as string,
+      content: latest.content as string,
+      timestamp: latest.timestamp as string,
+    };
+  }
+
+  /**
+   * Verify session ownership and load the requested threads in one round-trip.
+   * Returns null (with no response written) if either the session or threads
+   * lookup fails — callers must res.status(404).end() in that case.
+   */
+  private async loadOwnedThreads(
+    sessionId: string,
+    threadIds: string[],
+    userId: string,
+  ): Promise<Thread[] | null> {
+    const { data: session } = await this.supabase.db
+      .from('sessions')
+      .select('id')
+      .eq('id', sessionId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!session) return null;
+
+    const { data: threads } = await this.supabase.db
+      .from('threads')
+      .select('id, model_id, model_config')
+      .in('id', threadIds)
+      .eq('session_id', sessionId);
+
+    if (!threads || threads.length === 0) return null;
+    return threads as Thread[];
+  }
+
+  /**
+   * Shared SSE choreography for fan-out and retry. Sets up the response
+   * headers, wires the client-disconnect abort signal, kicks off one
+   * streamThread per thread in parallel, and emits the terminal `done`
+   * event when all have settled.
+   *
+   * `promptResolver` lets retryThreads supply a per-thread prompt — if it
+   * returns undefined, the shared `prompt` argument is used instead.
+   */
+  private async runStreams(
+    threads: Thread[],
+    prompt: string,
+    promptResolver: (t: Thread) => string | undefined,
+    userId: string,
+    res: Response,
+  ): Promise<void> {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -97,21 +297,23 @@ export class StreamingService {
 
     // When the client disconnects, abort every in-flight OpenRouter request
     // so we stop burning credits/tokens for output nobody will ever see.
-    // Each streamThread also persists whatever it accumulated up to that
-    // point, so the user's history isn't lost on a flaky tab close.
     const abortController = new AbortController();
     const onClose = (): void => abortController.abort();
     res.req.on('close', onClose);
 
     try {
-      // Fan out — fire all model requests concurrently, don't await all
       await Promise.allSettled(
         threads.map((thread: Thread) =>
-          this.streamThread(thread, prompt, userId, res, abortController.signal),
+          this.streamThread(
+            thread,
+            promptResolver(thread) ?? prompt,
+            userId,
+            res,
+            abortController.signal,
+          ),
         ),
       );
 
-      // Only emit the done event if the client is still listening
       if (!res.req.destroyed) {
         res.write('event: done\ndata: {}\n\n');
         res.end();
@@ -166,18 +368,7 @@ export class StreamingService {
       this.logger.warn(`Model ${resolvedModelId} not found in PROVIDER_REGISTRY — proceeding without BYOK routing`);
     }
 
-    const byokOnly = modelConfig_?.byokOnly ?? false;
-    const openRouterProvider = modelConfig_?.openRouterProvider;
-
-    if (byokOnly && !openRouterProvider) {
-      this.logger.error(`Model ${resolvedModelId} has byokOnly=true but openRouterProvider is missing`);
-      this.writeEvent(res, threadId, { type: 'error', message: 'Server config error: missing openRouterProvider for BYOK model' });
-      return;
-    }
-
-    this.logger.log(
-      `[${threadId}] model=${resolvedModelId} provider=${openRouterProvider ?? 'any'} byokOnly=${byokOnly} providerOnly=${byokOnly ? 'yes' : 'no'}`
-    );
+    this.logger.log(`[${threadId}] model=${resolvedModelId}`);
 
     try {
       let response: globalThis.Response | null = null;
@@ -202,10 +393,6 @@ export class StreamingService {
               messages,
               stream: true,
               temperature: (modelConfig['temperature'] as number) ?? 0.7,
-              // Force BYOK provider routing — only when configured
-              ...(byokOnly && openRouterProvider
-                ? { provider: { only: [openRouterProvider] } }
-                : {}),
             }),
           });
         } catch (fetchErr) {
@@ -238,9 +425,7 @@ export class StreamingService {
         } else if (status === 401 || status === 403) {
           message = 'OpenRouter authentication failed. Verify OPENROUTER_API_KEY is valid.';
         } else if (status === 402) {
-          message = byokOnly
-            ? `BYOK provider "${openRouterProvider ?? '?'}" rejected the request (402). Verify your provider key is active in OpenRouter BYOK settings.`
-            : 'OpenRouter credits unavailable (402). Add BYOK keys in OpenRouter settings or purchase credits.';
+          message = 'OpenRouter credits exhausted (402). Top up your OpenRouter account to continue.';
         } else if (status === 429) {
           message = 'Rate limited by model provider. Please retry in a few seconds.';
         }
