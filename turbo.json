@@ -1,5 +1,27 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalEnv": [
+    "NODE_ENV",
+    "CLERK_SECRET_KEY",
+    "CLERK_ISSUER_URL",
+    "CLERK_AUTHORIZED_PARTIES",
+    "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY",
+    "NEXT_PUBLIC_CLERK_SIGN_IN_URL",
+    "NEXT_PUBLIC_CLERK_SIGN_UP_URL",
+    "SUPABASE_URL",
+    "SUPABASE_ANON_KEY",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "NEXT_PUBLIC_SUPABASE_URL",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+    "NEXT_PUBLIC_API_URL",
+    "OPENROUTER_API_KEY",
+    "ALLOWED_ORIGINS",
+    "THROTTLE_DEFAULT_LIMIT",
+    "THROTTLE_DEFAULT_TTL_MS",
+    "THROTTLE_STREAMING_LIMIT",
+    "THROTTLE_STREAMING_TTL_MS",
+    "PORT"
+  ],
   "tasks": {
     "build": { "dependsOn": ["^build"], "outputs": [".next/**", "dist/**"] },
     "dev": { "cache": false, "persistent": true },
