@@ -1,10 +1,12 @@
 import { Controller, Get } from '@nestjs/common';
-import { PROVIDER_REGISTRY } from './provider-config.js';
+import { ProviderRegistryService } from './provider-registry.service.js';
 
 @Controller('providers')
 export class ProvidersController {
+  constructor(private readonly registry: ProviderRegistryService) {}
+
   @Get()
   findAll() {
-    return PROVIDER_REGISTRY;
+    return this.registry.getAll();
   }
 }

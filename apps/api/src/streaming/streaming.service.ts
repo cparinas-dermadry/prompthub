@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { Response } from 'express';
 import { UserSupabaseService } from '../supabase/user-supabase.service.js';
-import { PROVIDER_REGISTRY } from '../providers/provider-config.js';
+import { ProviderRegistryService } from '../providers/provider-registry.service.js';
 
 /**
  * Remap retired/broken model IDs to their current replacements.
@@ -19,8 +19,8 @@ const MODEL_MIGRATIONS: Record<string, string> = {
   'anthropic/claude-sonnet-4': 'anthropic/claude-sonnet-4.6',
   // Removed — point at current Opus
   'anthropic/claude-opus-4': 'anthropic/claude-opus-4.6',
-  // Never existed on OpenRouter despite being in our old registry
-  'anthropic/claude-opus-4.7-fast': 'anthropic/claude-opus-4.6',
+  // (claude-opus-4.7-fast used to be remapped here on the assumption it
+  // wasn't a real id. It IS live on OpenRouter — left to pass through.)
 
   // ── Google ─────────────────────────────────────────────────────────────────
   // gemini-2.0-flash-001 retiring June 1 2026; gemini-1.5 family deprecated
@@ -33,9 +33,14 @@ const MODEL_MIGRATIONS: Record<string, string> = {
   'google/gemini-pro': 'google/gemini-3.5-flash',
 
   // ── OpenAI ─────────────────────────────────────────────────────────────────
-  // GPT-4o family retired from registry on 2026-05-26
-  'openai/gpt-4o': 'openai/gpt-5.1',
-  'openai/gpt-4o-mini': 'openai/gpt-5-mini',
+  // GPT-4o family retired from registry on 2026-05-26. Targets updated to
+  // current GPT-5.x family on 2026-05-27 (previous targets gpt-5.1/gpt-5-mini
+  // are no longer in OpenRouter's live catalog).
+  'openai/gpt-4o': 'openai/gpt-5.5',
+  'openai/gpt-4o-mini': 'openai/gpt-5.4-mini',
+  'openai/gpt-5.1': 'openai/gpt-5.5',
+  'openai/gpt-5': 'openai/gpt-5.5',
+  'openai/gpt-5-mini': 'openai/gpt-5.4-mini',
 
   // ── xAI ────────────────────────────────────────────────────────────────────
   // Grok-2 retired from registry on 2026-05-26
@@ -44,6 +49,12 @@ const MODEL_MIGRATIONS: Record<string, string> = {
   'x-ai/grok-3': 'x-ai/grok-4.3',
   // Grok-4 deprecated by xAI on 2026-05-26 (OpenRouter returns 404 with redirect notice)
   'x-ai/grok-4': 'x-ai/grok-4.3',
+  // Grok-4 Fast deprecated by xAI on 2026-05-26 (OpenRouter returns 404 with
+  // redirect notice: "xAI recommends switching to Grok 4.3"). Both paid and
+  // :free variants are retired — :free callers also remap to grok-4.3 since
+  // xAI has not published a free successor.
+  'x-ai/grok-4-fast': 'x-ai/grok-4.3',
+  'x-ai/grok-4-fast:free': 'x-ai/grok-4.3',
 
   // ── DeepSeek ───────────────────────────────────────────────────────────────
   'deepseek/deepseek-r1:free': 'deepseek/deepseek-v4-flash:free',
@@ -92,7 +103,10 @@ interface Message {
 export class StreamingService {
   private readonly logger = new Logger(StreamingService.name);
 
-  constructor(private readonly supabase: UserSupabaseService) {}
+  constructor(
+    private readonly supabase: UserSupabaseService,
+    private readonly registry: ProviderRegistryService,
+  ) {}
 
   async fanOut(
     sessionId: string,
@@ -363,9 +377,9 @@ export class StreamingService {
       .map((m: Message) => ({ role: m.role, content: m.content }));
 
     // Look up model config for BYOK routing and validation
-    const modelConfig_ = PROVIDER_REGISTRY.find((p) => p.id === resolvedModelId);
+    const modelConfig_ = this.registry.findById(resolvedModelId);
     if (!modelConfig_) {
-      this.logger.warn(`Model ${resolvedModelId} not found in PROVIDER_REGISTRY — proceeding without BYOK routing`);
+      this.logger.warn(`Model ${resolvedModelId} not found in provider registry — proceeding without BYOK routing`);
     }
 
     this.logger.log(`[${threadId}] model=${resolvedModelId}`);
