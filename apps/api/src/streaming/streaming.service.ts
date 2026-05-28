@@ -382,7 +382,20 @@ export class StreamingService {
       this.logger.warn(`Model ${resolvedModelId} not found in provider registry — proceeding without BYOK routing`);
     }
 
-    this.logger.log(`[${threadId}] model=${resolvedModelId}`);
+    // Reasoning-family models (GPT-5.x, Claude Opus 4.7, …) reject
+    // `temperature` with a 400 at the provider. OpenRouter advertises this
+    // via supported_parameters — only send the field if we've confirmed
+    // it's accepted. When the registry has no entry (baseline fallback
+    // path), default to sending it: the BASELINE_REGISTRY models are
+    // older non-reasoning ones that all accept temperature.
+    const supportsTemperature =
+      modelConfig_?.supportedParameters === undefined
+        ? true
+        : modelConfig_.supportedParameters.includes('temperature');
+
+    this.logger.log(
+      `[${threadId}] model=${resolvedModelId} temperature=${supportsTemperature ? 'on' : 'off'}`,
+    );
 
     try {
       let response: globalThis.Response | null = null;
@@ -393,6 +406,19 @@ export class StreamingService {
           // Combine the per-attempt timeout with the client-disconnect signal
           // so closing the tab cancels in-flight fetches immediately.
           const signal = AbortSignal.any([clientAbort, AbortSignal.timeout(90_000)]);
+          // Build body conditionally — see supportsTemperature above. The
+          // shape stays identical for non-reasoning models, so this is a
+          // strict superset of the previous behaviour.
+          const requestBody: Record<string, unknown> = {
+            model: resolvedModelId,
+            messages,
+            stream: true,
+          };
+          if (supportsTemperature) {
+            requestBody.temperature =
+              (modelConfig['temperature'] as number) ?? 0.7;
+          }
+
           response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
             method: 'POST',
             signal,
@@ -402,12 +428,7 @@ export class StreamingService {
               'HTTP-Referer': 'https://prompthub.app',
               'X-Title': 'PromptHub',
             },
-            body: JSON.stringify({
-              model: resolvedModelId,
-              messages,
-              stream: true,
-              temperature: (modelConfig['temperature'] as number) ?? 0.7,
-            }),
+            body: JSON.stringify(requestBody),
           });
         } catch (fetchErr) {
           // Retry transient network errors (connect timeout, DNS, etc.)

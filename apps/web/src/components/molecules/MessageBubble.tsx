@@ -30,6 +30,15 @@ export const MessageBubble = memo(function MessageBubble({ message, onBookmark, 
           compact
             ? 'prose prose-xs text-[11px] leading-snug [&_p]:my-1 [&_li]:my-0.5 [&_pre]:text-[11px]'
             : 'prose prose-sm',
+          // Cap heading sizes inside tiles. By default prose styles H1/H2/H3
+          // at 1.5×–2× body, which makes a model that replies with headings
+          // (e.g. Claude often emits a real ## title) visually dwarf its
+          // neighbors. Force everything to body-comparable sizes so the
+          // side-by-side comparison stays readable.
+          '[&_h1]:text-sm [&_h1]:font-semibold [&_h1]:mt-3 [&_h1]:mb-1',
+          '[&_h2]:text-sm [&_h2]:font-semibold [&_h2]:mt-3 [&_h2]:mb-1',
+          '[&_h3]:text-[13px] [&_h3]:font-semibold [&_h3]:mt-2 [&_h3]:mb-1',
+          '[&_h4]:text-[13px] [&_h4]:font-semibold [&_h4]:mt-2 [&_h4]:mb-1',
         )}
       >
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>

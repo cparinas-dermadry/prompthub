@@ -151,6 +151,12 @@ export class ProviderRegistryService {
       },
       via: 'openrouter',
       ...(model.id.endsWith(':free') ? { free: true } : {}),
+      // Pass the capability list through verbatim. Undefined when OpenRouter
+      // omits the field; StreamingService treats undefined conservatively
+      // (i.e. doesn't assume `temperature` is supported).
+      ...(model.supported_parameters
+        ? { supportedParameters: model.supported_parameters }
+        : {}),
     };
   }
 }

@@ -26,6 +26,13 @@ export interface OpenRouterModel {
   };
   /** Set when OpenRouter has flagged the model as deprecated. */
   deprecated?: boolean;
+  /**
+   * Parameters the underlying provider accepts. Reasoning-family models
+   * (GPT-5.x, Claude Opus 4.7, etc.) typically omit `temperature` here —
+   * sending it anyway causes a 400 at the provider. StreamingService
+   * consults this when building request bodies.
+   */
+  supported_parameters?: string[];
 }
 
 interface OpenRouterModelsResponse {

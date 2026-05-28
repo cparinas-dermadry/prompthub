@@ -53,6 +53,12 @@ export interface ProviderConfig {
   via: 'openrouter' | 'direct';
   free?: boolean;
   isDefault?: boolean;
+  /**
+   * OpenRouter's `supported_parameters` list for this model. Used server-side
+   * by StreamingService to gate fields like `temperature` that reasoning
+   * models reject. Mirrors the field on apps/api ProviderConfig.
+   */
+  supportedParameters?: readonly string[];
 }
 
 // API request/response shapes

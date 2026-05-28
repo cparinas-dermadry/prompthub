@@ -35,4 +35,17 @@ export interface ProviderConfig {
   free?: boolean;
   /** Marks the recommended/default model for its provider group */
   isDefault?: boolean;
+  /**
+   * Per-model parameter capability list, taken verbatim from OpenRouter's
+   * /api/v1/models `supported_parameters` field. StreamingService consults
+   * this before adding optional fields like `temperature` to the request
+   * body — newer reasoning models (e.g. GPT-5.x, Claude Opus 4.7) omit
+   * `temperature` from this list and will 400 if it's sent.
+   *
+   * Empty array (vs undefined) means "model exists but advertises no
+   * tunable parameters" — undefined means "we didn't fetch from the live
+   * catalog" (baseline fallback path). Treat both conservatively: only
+   * send a parameter if we can prove the model accepts it.
+   */
+  supportedParameters?: readonly string[];
 }
