@@ -48,4 +48,21 @@ export interface ProviderConfig {
    * send a parameter if we can prove the model accepts it.
    */
   supportedParameters?: readonly string[];
+  /**
+   * True when the model has a usable NATIVE web-search path through
+   * OpenRouter — i.e. the `openrouter:web_search` server tool with
+   * `engine: "native"` will actually honor `user_location` instead of
+   * silently falling back to Exa (which ignores location, per the
+   * OpenRouter docs).
+   *
+   * Populated from a hand-curated allowlist in provider-overlay.ts
+   * (WEB_SEARCH_CAPABLE). OpenRouter's `supported_parameters` does NOT
+   * advertise web-search capability, so this can't be derived from the
+   * live catalog — keep the list small and current.
+   *
+   * StreamingService uses this to decide whether to attach the
+   * `openrouter:web_search` tool with `user_location` when the user
+   * sets a session location.
+   */
+  supportsWebSearch?: boolean;
 }

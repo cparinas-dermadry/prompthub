@@ -27,7 +27,14 @@ export class StreamingController {
     @CurrentUser() user: { sub: string },
     @Res() res: Response,
   ): Promise<void> {
-    await this.streamingService.fanOut(dto.sessionId, dto.prompt, dto.threadIds, user.sub, res);
+    await this.streamingService.fanOut(
+      dto.sessionId,
+      dto.prompt,
+      dto.threadIds,
+      user.sub,
+      res,
+      dto.location,
+    );
   }
 
   // Retry is rate-limited slightly more generously than fan-out — retries are
@@ -60,6 +67,7 @@ export class StreamingController {
       overrides,
       user.sub,
       res,
+      dto.location,
     );
   }
 }

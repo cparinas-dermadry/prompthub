@@ -5,7 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { BookmarkIcon, CopyIcon } from 'lucide-react';
+import { BookmarkIcon, CopyIcon, ExternalLinkIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Message } from '@prompthub/types';
 
@@ -43,6 +43,36 @@ export const MessageBubble = memo(function MessageBubble({ message, onBookmark, 
       >
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
       </div>
+
+      {/* Citations — only rendered for assistant rows produced by web-search-
+          capable models with a session location set. The server already
+          dedupes by URL; we just lay them out with the domain as the visible
+          label so the visibility-testing user can scan sources at a glance. */}
+      {message.role === 'assistant' &&
+        message.citations &&
+        message.citations.length > 0 && (
+          <div
+            className={cn(
+              'mt-2 flex flex-wrap gap-1 border-t border-divider pt-2',
+              compact ? 'text-[10px]' : 'text-xs',
+            )}
+          >
+            <span className="text-muted-foreground">Sources:</span>
+            {message.citations.map((c, i) => (
+              <a
+                key={`${c.url}-${i}`}
+                href={c.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={c.title ?? c.url}
+                className="inline-flex items-center gap-0.5 text-teal hover:underline"
+              >
+                {c.domain ?? c.url}
+                <ExternalLinkIcon className="h-3 w-3 opacity-60" />
+              </a>
+            ))}
+          </div>
+        )}
 
       {/* Hover toolbar */}
       <div className="absolute -top-1 right-0 hidden group-hover:flex items-center gap-1 bg-white rounded-md p-0.5 border border-divider shadow-sm">

@@ -4,7 +4,7 @@ import { useCallback, useRef, useState } from 'react';
 import { useAuth } from '@clerk/nextjs';
 import { streamPrompt, retryPrompt, type RetryOverride } from '@/lib/streaming';
 import { useSessionStore } from '@/store/session.store';
-import type { Message } from '@prompthub/types';
+import type { Message, Citation } from '@prompthub/types';
 
 const FLUSH_INTERVAL_MS = 30;
 
@@ -35,6 +35,7 @@ export function useStreaming(sessionId: string) {
   const finishStream = useSessionStore((s) => s.finishStream);
   const setStreamError = useSessionStore((s) => s.setStreamError);
   const setMessages = useSessionStore((s) => s.setMessages);
+  const setStreamingCitations = useSessionStore((s) => s.setStreamingCitations);
 
   const flushTokenBuffer = useCallback(() => {
     flushTimerRef.current = null;
@@ -81,6 +82,12 @@ export function useStreaming(sessionId: string) {
           tokenBufferRef.current[threadId] = (tokenBufferRef.current[threadId] ?? '') + token;
           scheduleFlush();
         },
+        onCitations: (threadId: string, citations: Citation[]) => {
+          // Server emits the cumulative deduped list on each `citations`
+          // event — replace, don't append. Stash on the store so the live
+          // tile can render sources while the answer is still streaming.
+          setStreamingCitations(threadId, citations);
+        },
         onEnd: (threadId: string, messageId?: string) => {
           if (flushTimerRef.current !== null) {
             clearTimeout(flushTimerRef.current);
@@ -105,7 +112,13 @@ export function useStreaming(sessionId: string) {
         },
       };
     },
-    [scheduleFlush, flushTokenBuffer, finishStream, setStreamError],
+    [
+      scheduleFlush,
+      flushTokenBuffer,
+      finishStream,
+      setStreamError,
+      setStreamingCitations,
+    ],
   );
 
   const send = useCallback(
@@ -115,6 +128,11 @@ export function useStreaming(sessionId: string) {
       // Filter out optimistic temp threads (not yet persisted to DB, not valid UUIDs)
       const threadIds = threads.map((t) => t.id).filter((id) => !id.startsWith('temp-'));
 
+      // Snapshot the active session location so the optimistic user-message
+      // stamp matches what the server is about to persist. Read once, before
+      // streaming, so a mid-stream location change doesn't mis-stamp.
+      const stampLocation =
+        useSessionStore.getState().currentSession?.location ?? null;
       // Add user message to store immediately (backend persists the same content per thread)
       threadIds.forEach((id) => {
         const userMessage: Message = {
@@ -123,6 +141,8 @@ export function useStreaming(sessionId: string) {
           role: 'user',
           content: prompt.trim(),
           is_bookmarked: false,
+          location: stampLocation,
+          citations: null,
           timestamp: new Date().toISOString(),
         };
         addMessage(id, userMessage);
@@ -133,10 +153,20 @@ export function useStreaming(sessionId: string) {
 
       abortRef.current = new AbortController();
 
+      // Reuse the snapshot we took above for stamping the user message —
+      // request location is the same one we just stamped, so client-side
+      // history and server-side framing stay aligned.
+      const requestLocation = stampLocation ?? undefined;
+
       try {
         await streamPrompt(
           getToken,
-          { sessionId, prompt: prompt.trim(), threadIds },
+          {
+            sessionId,
+            prompt: prompt.trim(),
+            threadIds,
+            ...(requestLocation ? { location: requestLocation } : {}),
+          },
           buildCallbacks(threadIds),
           abortRef.current.signal,
         );
@@ -227,6 +257,9 @@ export function useStreaming(sessionId: string) {
 
       abortRef.current = new AbortController();
 
+      const sessionLocation =
+        useSessionStore.getState().currentSession?.location ?? undefined;
+
       try {
         await retryPrompt(
           getToken,
@@ -234,6 +267,7 @@ export function useStreaming(sessionId: string) {
             sessionId,
             threadIds: cleanIds,
             edits: edits.length > 0 ? edits : undefined,
+            ...(sessionLocation ? { location: sessionLocation } : {}),
           },
           buildCallbacks(cleanIds),
           abortRef.current.signal,

@@ -6,6 +6,7 @@ import {
   DISPLAY_NAME_OVERRIDES,
   FAMILY_OVERLAYS,
   MODEL_ALLOWLIST,
+  WEB_SEARCH_CAPABLE,
   type FamilyMeta,
 } from './provider-overlay.js';
 import {
@@ -157,6 +158,10 @@ export class ProviderRegistryService {
       ...(model.supported_parameters
         ? { supportedParameters: model.supported_parameters }
         : {}),
+      // Web-search capability is a local opinion (curated allowlist) —
+      // NOT derived from the live catalog because OpenRouter doesn't
+      // expose it. See provider-overlay.ts WEB_SEARCH_CAPABLE for why.
+      ...(WEB_SEARCH_CAPABLE.has(model.id) ? { supportsWebSearch: true } : {}),
     };
   }
 }

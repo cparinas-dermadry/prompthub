@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { Response } from 'express';
 import { UserSupabaseService } from '../supabase/user-supabase.service.js';
 import { ProviderRegistryService } from '../providers/provider-registry.service.js';
+import type { Citation, PromptLocation } from '@prompthub/types';
 
 /**
  * Remap retired/broken model IDs to their current replacements.
@@ -72,8 +73,33 @@ interface Thread {
 }
 
 interface Message {
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string;
+}
+
+/**
+ * Build the invisible "you are answering a user located in …" system message
+ * for the GEO/SEO visibility testing feature. Brand-agnostic by design — the
+ * point is to observe which brands the model surfaces on its own, so we do
+ * NOT name any specific brand or product category in this framing.
+ *
+ * Returns null when no location is set, so the caller can skip prepending.
+ */
+function buildLocationFraming(location: PromptLocation | undefined): string | null {
+  if (!location) return null;
+  const where = location.label
+    ? location.label
+    : [location.city, location.region, location.country].filter(Boolean).join(', ');
+  if (!where) return null;
+  // Keep this short and brand-neutral. Mention timezone only if provided —
+  // it nudges date/time-sensitive answers (events, "current" recommendations).
+  const tzClause = location.timezone ? ` Their local timezone is ${location.timezone}.` : '';
+  return (
+    `You are answering a user located in ${where}.${tzClause} ` +
+    `Answer naturally for that locale — consider local availability, ` +
+    `regulations, popular brands, and language norms appropriate to the region. ` +
+    `Do not mention this location instruction in your response.`
+  );
 }
 
 /**
@@ -114,6 +140,7 @@ export class StreamingService {
     threadIds: string[],
     userId: string,
     res: Response,
+    location?: PromptLocation,
   ): Promise<void> {
     const threads = await this.loadOwnedThreads(sessionId, threadIds, userId);
     if (!threads) {
@@ -122,16 +149,19 @@ export class StreamingService {
     }
 
     // Save user message to all threads — only fan-out does this; retry
-    // reuses the existing last user message instead.
+    // reuses the existing last user message instead. The location stamp
+    // here is the source of truth for "what locale was this turn run
+    // under?" — kept even if the session's default changes later.
     await this.supabase.db.from('messages').insert(
       threads.map((t: Thread) => ({
         thread_id: t.id,
         role: 'user',
         content: prompt,
+        location: location ?? null,
       })),
     );
 
-    await this.runStreams(threads, prompt, () => undefined, userId, res);
+    await this.runStreams(threads, prompt, () => undefined, userId, res, location);
   }
 
   /**
@@ -141,10 +171,13 @@ export class StreamingService {
    *  1. Resolve the rewind point: either the explicit `fromMessageId` override
    *     or, if not given, the latest user message in the thread.
    *  2. If an edited prompt was supplied, update that user message's content.
-   *  3. Delete every message timestamped AFTER the rewind point — both user
+   *  3. If a location was supplied on retry, update the rewind-point user
+   *     message's location stamp so the retried turn reflects the current
+   *     locale (not the one the original turn used).
+   *  4. Delete every message timestamped AFTER the rewind point — both user
    *     AND assistant. This is the "silent invalidation" of subsequent turns
    *     when the user retries an earlier turn (matches ChatGPT/Claude.ai UX).
-   *  4. Re-stream via the existing streamThread machinery, which loads
+   *  5. Re-stream via the existing streamThread machinery, which loads
    *     history from the DB (now truncated at the rewind point + edited).
    *
    * Called by POST /streaming/retry. Does NOT insert a new user message.
@@ -155,6 +188,7 @@ export class StreamingService {
     overrides: Map<string, { prompt?: string; fromMessageId?: string }>,
     userId: string,
     res: Response,
+    location?: PromptLocation,
   ): Promise<void> {
     const threads = await this.loadOwnedThreads(sessionId, threadIds, userId);
     if (!threads) {
@@ -175,14 +209,25 @@ export class StreamingService {
         continue;
       }
 
-      // Apply edited prompt to the rewind-point user message if supplied
+      // Build the update patch lazily — if neither the prompt nor the
+      // location changed, we skip the round-trip entirely.
+      const patch: Record<string, unknown> = {};
       if (
         override?.prompt !== undefined &&
         override.prompt !== rewindPoint.content
       ) {
+        patch.content = override.prompt;
+      }
+      if (location !== undefined) {
+        // Stamp the rewind-point user message with the location this retry
+        // is running under. Pass `null` to clear by sending location=null
+        // from the controller (currently we only set it positively).
+        patch.location = location;
+      }
+      if (Object.keys(patch).length > 0) {
         await this.supabase.db
           .from('messages')
-          .update({ content: override.prompt })
+          .update(patch)
           .eq('id', rewindPoint.id);
       }
 
@@ -207,7 +252,7 @@ export class StreamingService {
     }
 
     const retryable = threads.filter((t) => retryableThreadIds.has(t.id));
-    await this.runStreams(retryable, '', () => undefined, userId, res);
+    await this.runStreams(retryable, '', () => undefined, userId, res, location);
   }
 
   /**
@@ -302,6 +347,7 @@ export class StreamingService {
     promptResolver: (t: Thread) => string | undefined,
     userId: string,
     res: Response,
+    location: PromptLocation | undefined,
   ): Promise<void> {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -324,6 +370,7 @@ export class StreamingService {
             userId,
             res,
             abortController.signal,
+            location,
           ),
         ),
       );
@@ -343,11 +390,19 @@ export class StreamingService {
     userId: string,
     res: Response,
     clientAbort: AbortSignal,
+    location: PromptLocation | undefined,
   ): Promise<void> {
     const { id: threadId, model_id: modelId, model_config: modelConfig } = thread;
     // Accumulator is declared outside the try so the catch/finally can
     // persist whatever we received before an abort/error.
     let fullContent = '';
+    // Web-search citations accumulated across all `url_citation` annotations
+    // seen in the SSE stream. Deduped by URL before emit/persist.
+    const citationsByUrl = new Map<string, Citation>();
+    // Sentinel: have we already emitted a `citations` SSE event for this
+    // thread? We push one as soon as any citations arrive so the client can
+    // render them while the answer is still streaming.
+    let citationsEmittedKey = '';
 
     // Transparently migrate retired model IDs
     const resolvedModelId = MODEL_MIGRATIONS[modelId] ?? modelId;
@@ -371,10 +426,31 @@ export class StreamingService {
       .order('timestamp', { ascending: false })
       .limit(40);
 
-    const messages: Message[] = (history ?? [])
+    const historyMessages: Message[] = (history ?? [])
       .slice()
       .reverse()
       .map((m: Message) => ({ role: m.role, content: m.content }));
+
+    // Compose the leading system message from two sources:
+    //   1. model_config.system_prompt — per-thread user-set system prompt
+    //      (previously silently dropped; wiring it in is correct).
+    //   2. Location framing — invisible "you are answering a user located in
+    //      {label}" instruction generated from the active PromptLocation.
+    //
+    // When both are present we join with a newline; either alone is fine.
+    // Neither set → no system message, exact same wire shape as before.
+    const userSystemPrompt =
+      typeof modelConfig['system_prompt'] === 'string' && modelConfig['system_prompt'].trim()
+        ? (modelConfig['system_prompt'] as string).trim()
+        : null;
+    const locationFraming = buildLocationFraming(location);
+    const systemContent = [userSystemPrompt, locationFraming]
+      .filter((s): s is string => Boolean(s))
+      .join('\n\n');
+
+    const messages: Message[] = systemContent
+      ? [{ role: 'system', content: systemContent }, ...historyMessages]
+      : historyMessages;
 
     // Look up model config for BYOK routing and validation
     const modelConfig_ = this.registry.findById(resolvedModelId);
@@ -393,8 +469,25 @@ export class StreamingService {
         ? true
         : modelConfig_.supportedParameters.includes('temperature');
 
+    // Decide whether to attach the openrouter:web_search server tool.
+    //
+    // CRITICAL — engine selection: we use `engine: "native"`, NOT the default
+    // `"auto"`. Per OpenRouter docs, `user_location` is honored ONLY by the
+    // native provider search; `auto` silently falls back to Exa (which
+    // ignores user_location). For a GEO/SEO testing tool that fallback
+    // defeats the entire point of the feature.
+    //
+    // Gate: model must be in WEB_SEARCH_CAPABLE (curated allowlist — OpenRouter
+    // does not advertise web-search support through supported_parameters)
+    // AND a location must be set. Without a location we skip the tool — this
+    // is a location-testing feature, not a generic "enable web search" toggle.
+    const useWebSearch = Boolean(
+      location && modelConfig_?.supportsWebSearch,
+    );
+
     this.logger.log(
-      `[${threadId}] model=${resolvedModelId} temperature=${supportsTemperature ? 'on' : 'off'}`,
+      `[${threadId}] model=${resolvedModelId} temperature=${supportsTemperature ? 'on' : 'off'} ` +
+        `location=${location?.country ?? 'none'} webSearch=${useWebSearch ? 'native' : 'off'}`,
     );
 
     try {
@@ -417,6 +510,24 @@ export class StreamingService {
           if (supportsTemperature) {
             requestBody.temperature =
               (modelConfig['temperature'] as number) ?? 0.7;
+          }
+          if (useWebSearch && location) {
+            requestBody.tools = [
+              {
+                type: 'openrouter:web_search',
+                parameters: {
+                  engine: 'native',
+                  max_results: 5,
+                  user_location: {
+                    type: 'approximate',
+                    country: location.country,
+                    ...(location.region ? { region: location.region } : {}),
+                    ...(location.city ? { city: location.city } : {}),
+                    ...(location.timezone ? { timezone: location.timezone } : {}),
+                  },
+                },
+              },
+            ];
           }
 
           response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -499,13 +610,77 @@ export class StreamingService {
             if (data === '[DONE]') continue;
 
             try {
+              // OpenRouter's delta carries `content` for normal tokens AND
+              // `annotations` for citations / other server-tool outputs.
+              // We parse both; we may also see consolidated annotations on
+              // the final message object (`message.annotations`) — handle
+              // that as a fallback when delta annotations are absent.
               const parsed = JSON.parse(data) as {
-                choices?: Array<{ delta?: { content?: string } }>;
+                choices?: Array<{
+                  delta?: {
+                    content?: string;
+                    annotations?: Array<{
+                      type?: string;
+                      url_citation?: {
+                        url?: string;
+                        title?: string;
+                        content?: string;
+                      };
+                    }>;
+                  };
+                  message?: {
+                    annotations?: Array<{
+                      type?: string;
+                      url_citation?: {
+                        url?: string;
+                        title?: string;
+                        content?: string;
+                      };
+                    }>;
+                  };
+                }>;
               };
-              const token = parsed.choices?.[0]?.delta?.content;
+              const choice = parsed.choices?.[0];
+              const token = choice?.delta?.content;
               if (token) {
                 fullContent += token;
                 this.writeEvent(res, threadId, { type: 'token', token });
+              }
+
+              // Accumulate citations from delta.annotations and (fallback)
+              // message.annotations. Dedupe by URL so multiple search calls
+              // pointing at the same source don't double-render.
+              const newAnnotations = [
+                ...(choice?.delta?.annotations ?? []),
+                ...(choice?.message?.annotations ?? []),
+              ];
+              if (newAnnotations.length > 0) {
+                for (const ann of newAnnotations) {
+                  if (ann.type !== 'url_citation') continue;
+                  const u = ann.url_citation?.url;
+                  if (!u) continue;
+                  if (citationsByUrl.has(u)) continue;
+                  citationsByUrl.set(u, {
+                    url: u,
+                    ...(ann.url_citation?.title ? { title: ann.url_citation.title } : {}),
+                    ...(ann.url_citation?.content
+                      ? { snippet: ann.url_citation.content }
+                      : {}),
+                    domain: safeHostname(u),
+                  });
+                }
+                // Emit a fresh `citations` event whenever we've added a
+                // new URL. We send the cumulative array each time so the
+                // client just replaces its local copy; the deduped key
+                // prevents redundant emits when the same set is repeated.
+                const key = Array.from(citationsByUrl.keys()).sort().join('|');
+                if (key !== citationsEmittedKey && citationsByUrl.size > 0) {
+                  citationsEmittedKey = key;
+                  this.writeEvent(res, threadId, {
+                    type: 'citations',
+                    citations: Array.from(citationsByUrl.values()),
+                  });
+                }
               }
             } catch {
               // malformed SSE line — skip
@@ -523,20 +698,35 @@ export class StreamingService {
         reader.releaseLock();
       }
 
+      const finalCitations =
+        citationsByUrl.size > 0 ? Array.from(citationsByUrl.values()) : null;
+
       // If the client aborted mid-stream, persist whatever we have but skip
       // the end event — the response is already closed.
       if (clientAbort.aborted) {
-        await this.persistAssistantMessage(threadId, fullContent);
+        await this.persistAssistantMessage(
+          threadId,
+          fullContent,
+          location,
+          finalCitations,
+        );
         return;
       }
 
       // Save completed assistant message to Supabase
-      const savedMessageId = await this.persistAssistantMessage(threadId, fullContent);
+      const savedMessageId = await this.persistAssistantMessage(
+        threadId,
+        fullContent,
+        location,
+        finalCitations,
+      );
       this.writeEvent(res, threadId, { type: 'end', messageId: savedMessageId });
     } catch (err) {
       // Persist whatever streamed before the failure so the user keeps the
       // partial answer even on network blips / mid-stream errors.
-      await this.persistAssistantMessage(threadId, fullContent);
+      const finalCitations =
+        citationsByUrl.size > 0 ? Array.from(citationsByUrl.values()) : null;
+      await this.persistAssistantMessage(threadId, fullContent, location, finalCitations);
       const isAbort = (err as Error).name === 'AbortError' || clientAbort.aborted;
       if (isAbort) {
         this.logger.log(`Stream aborted for thread ${threadId} (client disconnect)`);
@@ -552,10 +742,16 @@ export class StreamingService {
    * new row's id (or undefined if there was nothing to save / the insert
    * failed). Used by both the happy path and the abort/error paths so
    * partial responses don't get lost.
+   *
+   * `location` is the locale stamp this turn ran under (null when unset).
+   * `citations` is the deduped url_citation set from openrouter:web_search
+   * (null when the model didn't search or isn't search-capable).
    */
   private async persistAssistantMessage(
     threadId: string,
     content: string,
+    location: PromptLocation | undefined,
+    citations: Citation[] | null,
   ): Promise<string | undefined> {
     if (!content) return undefined;
     try {
@@ -565,6 +761,8 @@ export class StreamingService {
           thread_id: threadId,
           role: 'assistant',
           content,
+          location: location ?? null,
+          citations: citations ?? null,
         })
         .select('id')
         .single();
@@ -585,5 +783,17 @@ export class StreamingService {
     } catch {
       // client disconnected — ignore
     }
+  }
+}
+
+/**
+ * Best-effort host extraction for citation display. Falls back to undefined
+ * if the URL doesn't parse — never throws.
+ */
+function safeHostname(url: string): string | undefined {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
   }
 }

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Session, Thread, Message } from '@prompthub/types';
+import type { Session, Thread, Message, Citation } from '@prompthub/types';
 import { createSelector } from 'reselect';
 
 export type StreamingStatus = 'idle' | 'streaming' | 'done' | 'error';
@@ -18,16 +18,24 @@ interface SessionState {
   // Per-thread streaming status
   streamingStatus: Record<string, StreamingStatus>;
 
+  // Live streaming citations (pre-commit), keyed by threadId. Replaced
+  // wholesale on each `citations` SSE event (server sends cumulative).
+  // Flushed onto the committed message in finishStream().
+  streamingCitations: Record<string, Citation[]>;
+
   // Actions
   setSession: (session: Session) => void;
   setThreads: (threads: Thread[]) => void;
   setMessages: (threadId: string, messages: Message[]) => void;
   addMessage: (threadId: string, message: Message) => void;
   appendToken: (threadId: string, token: string) => void;
+  setStreamingCitations: (threadId: string, citations: Citation[]) => void;
   finishStream: (threadId: string, persistedMessageId?: string) => void;
   setStreamError: (threadId: string) => void;
   commitStreamedMessage: (threadId: string, message: Message) => void;
   setAllStreaming: (threadIds: string[]) => void;
+  /** Patch the current session in place (e.g. after a location PATCH). */
+  patchSession: (patch: Partial<Session>) => void;
   bookmarkMessage: (messageId: string, value: boolean) => void;
   removeThread: (threadId: string) => void;
   replaceThread: (threadId: string, updated: Thread) => void;
@@ -40,8 +48,16 @@ export const useSessionStore = create<SessionState>((set) => ({
   messages: {},
   streamingTokens: {},
   streamingStatus: {},
+  streamingCitations: {},
 
   setSession: (session) => set({ currentSession: session }),
+
+  patchSession: (patch) =>
+    set((s) =>
+      s.currentSession
+        ? { currentSession: { ...s.currentSession, ...patch } }
+        : s,
+    ),
 
   setThreads: (threads) => set({ threads }),
 
@@ -64,13 +80,21 @@ export const useSessionStore = create<SessionState>((set) => ({
       },
     })),
 
+  setStreamingCitations: (threadId, citations) =>
+    set((s) => ({
+      streamingCitations: { ...s.streamingCitations, [threadId]: citations },
+    })),
+
   finishStream: (threadId, persistedMessageId) =>
     set((s) => {
       const content = s.streamingTokens[threadId] ?? '';
+      const liveCitations = s.streamingCitations[threadId];
       const existing = s.messages[threadId] ?? [];
-      // Commit buffered tokens as a local message so content persists
-      // and the streaming cursor disappears. The backend also saves to DB;
-      // on next session load Supabase messages will replace this entry.
+      // Commit buffered tokens (and any accumulated citations) as a local
+      // message so content persists and the streaming cursor disappears.
+      // The backend also saves to DB; on next session load Supabase
+      // messages will replace this entry — including the authoritative
+      // citations array on that row.
       const committed = content
         ? [
             ...existing,
@@ -80,6 +104,9 @@ export const useSessionStore = create<SessionState>((set) => ({
               role: 'assistant' as const,
               content,
               is_bookmarked: false,
+              location: s.currentSession?.location ?? null,
+              citations:
+                liveCitations && liveCitations.length > 0 ? liveCitations : null,
               timestamp: new Date().toISOString(),
             },
           ]
@@ -87,6 +114,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       return {
         streamingStatus: { ...s.streamingStatus, [threadId]: 'done' },
         streamingTokens: { ...s.streamingTokens, [threadId]: '' },
+        streamingCitations: { ...s.streamingCitations, [threadId]: [] },
         messages: { ...s.messages, [threadId]: committed },
       };
     }),
@@ -135,11 +163,13 @@ export const useSessionStore = create<SessionState>((set) => ({
       const { [threadId]: _msgs, ...messages } = s.messages;
       const { [threadId]: _tok, ...streamingTokens } = s.streamingTokens;
       const { [threadId]: _st, ...streamingStatus } = s.streamingStatus;
+      const { [threadId]: _cit, ...streamingCitations } = s.streamingCitations;
       return {
         threads: s.threads.filter((t) => t.id !== threadId),
         messages,
         streamingTokens,
         streamingStatus,
+        streamingCitations,
       };
     }),
 
@@ -155,6 +185,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       messages: {},
       streamingTokens: {},
       streamingStatus: {},
+      streamingCitations: {},
     }),
 }));
 
