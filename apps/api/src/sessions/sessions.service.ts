@@ -62,6 +62,11 @@ export class SessionsService {
         name: dto.name,
         tags: dto.tags ?? [],
         active_providers: dto.activeProviders ?? [],
+        // Sessions are typically created without a location (Sidebar
+        // quick-create); the user picks one in the workspace header.
+        // Persist if supplied to support future "create with location"
+        // entry points.
+        ...(dto.location !== undefined ? { location: dto.location } : {}),
       })
       .select()
       .single();
@@ -81,6 +86,12 @@ export class SessionsService {
         ...(dto.name !== undefined && { name: dto.name }),
         ...(dto.tags !== undefined && { tags: dto.tags }),
         ...(dto.activeProviders !== undefined && { active_providers: dto.activeProviders }),
+        // location uses an explicit `in dto` check so the client can pass
+        // `null` to CLEAR the session location. Sending `undefined`
+        // (i.e. omitting the field) is a no-op.
+        ...(Object.prototype.hasOwnProperty.call(dto, 'location')
+          ? { location: dto.location }
+          : {}),
       })
       .eq('id', id)
       .eq('user_id', userId)

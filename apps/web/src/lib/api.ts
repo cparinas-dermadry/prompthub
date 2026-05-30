@@ -3,7 +3,13 @@
  * All functions take a `getToken` function from Clerk's useAuth() hook.
  */
 
-import type { Session, Thread, Message, ProviderConfig } from '@prompthub/types';
+import type {
+  Session,
+  Thread,
+  Message,
+  ProviderConfig,
+  PromptLocation,
+} from '@prompthub/types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
@@ -67,7 +73,12 @@ export function getSession(getToken: GetToken, id: string): Promise<Session> {
 
 export function createSession(
   getToken: GetToken,
-  body: { name: string; tags?: string[]; activeProviders?: string[] },
+  body: {
+    name: string;
+    tags?: string[];
+    activeProviders?: string[];
+    location?: PromptLocation;
+  },
 ): Promise<Session> {
   return request<Session>(getToken, '/sessions', {
     method: 'POST',
@@ -78,7 +89,14 @@ export function createSession(
 export function updateSession(
   getToken: GetToken,
   id: string,
-  body: Partial<{ name: string; tags: string[]; activeProviders: string[] }>,
+  // `location: null` clears the session location; omitting the key leaves
+  // it untouched. Mirrors the server-side `hasOwnProperty` check.
+  body: Partial<{
+    name: string;
+    tags: string[];
+    activeProviders: string[];
+    location: PromptLocation | null;
+  }>,
 ): Promise<Session> {
   return request<Session>(getToken, `/sessions/${id}`, {
     method: 'PATCH',

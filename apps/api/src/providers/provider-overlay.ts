@@ -146,6 +146,52 @@ export const MODEL_ALLOWLIST: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Models with a usable NATIVE web-search path through OpenRouter.
+ *
+ * IMPORTANT — why this is a manual allowlist and not a flag on the catalog:
+ *   OpenRouter's `openrouter:web_search` server tool supports multiple
+ *   engines, but `user_location` is **only honored by `engine: "native"`**
+ *   (per https://openrouter.ai/docs/guides/features/server-tools/web-search).
+ *   With `engine: "auto"`, requests on models without a native search path
+ *   silently fall back to Exa — where `user_location` is dropped on the
+ *   floor. For a GEO/SEO testing tool that defeats the whole point.
+ *
+ *   So we restrict the web-search-grounded path to models we've confirmed
+ *   have a real native search engine, and set `engine: "native"` explicitly
+ *   on the request. Anything not in this set runs framing-only (system
+ *   message) without the tool — still useful, just less authoritative.
+ *
+ * Maintenance:
+ *   - Keep this list tight. Add a model only after confirming via
+ *     OpenRouter docs that it has a native search engine that honors
+ *     `user_location`.
+ *   - Perplexity Sonar models have built-in search but their native path
+ *     has limitations (e.g. domain filtering not supported via server
+ *     tool path per OpenRouter docs). They DO honor user_location.country
+ *     so they're in. Re-verify if behavior changes.
+ *   - GPT-5.5 / GPT-5.5-pro have native web search through OpenAI.
+ *   - Claude Opus / Sonnet 4.6 have native web search through Anthropic.
+ *   - xAI Grok 4.3 has native search.
+ *   - Gemini grounding via OpenRouter is patchy; left OFF until verified.
+ */
+export const WEB_SEARCH_CAPABLE: ReadonlySet<string> = new Set([
+  // OpenAI native search
+  'openai/gpt-5.5',
+  'openai/gpt-5.5-pro',
+  // Anthropic native search
+  'anthropic/claude-opus-4.7',
+  'anthropic/claude-opus-4.6',
+  'anthropic/claude-sonnet-4.6',
+  // xAI native search
+  'x-ai/grok-4.3',
+  'x-ai/grok-4.20',
+  // Perplexity Sonar (inherently search-grounded)
+  'perplexity/sonar',
+  'perplexity/sonar-pro',
+  'perplexity/sonar-reasoning-pro',
+]);
+
+/**
  * Per-id display name overrides. Default is OpenRouter's `name` field with the
  * "Provider: " prefix stripped. Add an entry here only when the upstream name
  * is too long or off-brand for our picker.

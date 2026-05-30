@@ -9,6 +9,7 @@ import { PromptInput } from '@/components/organisms/PromptInput';
 import { HighlightsPanel } from '@/components/organisms/HighlightsPanel';
 import { ProviderSelector } from '@/components/organisms/ProviderSelector';
 import { RetryFailedPill } from '@/components/molecules/RetryFailedPill';
+import { LocationPicker } from '@/components/molecules/LocationPicker';
 import { useSession } from '@/hooks/use-session';
 import { useAddThreads } from '@/hooks/use-add-threads';
 import { useSessionStore } from '@/store/session.store';
@@ -123,6 +124,11 @@ export function SessionWorkspace({ sessionId }: SessionWorkspaceProps) {
           <PlusCircleIcon className="h-4 w-4" />
           {adding ? 'Adding…' : 'Add Models'}
         </Button>
+        {/* Per-session "test from here" location for GEO/SEO/AEO visibility
+            testing. Setting this here (not in the prompt box) keeps the user's
+            typed message unchanged while every model in the session receives
+            the same locale framing server-side. */}
+        <LocationPicker sessionId={sessionId} />
         <div className="ml-auto">
           <RetryFailedPill sessionId={sessionId} />
         </div>

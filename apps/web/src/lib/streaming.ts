@@ -4,29 +4,51 @@
  *
  * Server event format:
  *   event: {threadId}\ndata: {"type":"token","token":"..."}\n\n
+ *   event: {threadId}\ndata: {"type":"citations","citations":[...]}\n\n
  *   event: {threadId}\ndata: {"type":"end","messageId":"..."}\n\n
  *   event: done\ndata: {}\n\n
  *   event: {threadId}\ndata: {"type":"error","message":"..."}\n\n
  */
+
+import type { PromptLocation, Citation } from '@prompthub/types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
 export type StreamTokenEvent = { type: 'token'; token: string };
 export type StreamEndEvent = { type: 'end'; messageId?: string };
 export type StreamErrorEvent = { type: 'error'; message: string };
-export type StreamData = StreamTokenEvent | StreamEndEvent | StreamErrorEvent;
+/**
+ * Cumulative citations from the openrouter:web_search server tool. The server
+ * may emit this event multiple times during the stream — each emit is the
+ * full deduped list so far, so clients should REPLACE their local copy on
+ * receipt, not append.
+ */
+export type StreamCitationsEvent = { type: 'citations'; citations: Citation[] };
+export type StreamData =
+  | StreamTokenEvent
+  | StreamEndEvent
+  | StreamErrorEvent
+  | StreamCitationsEvent;
 
 export interface StreamCallbacks {
   onToken: (threadId: string, token: string) => void;
   onEnd: (threadId: string, messageId?: string) => void;
   onError: (threadId: string, message: string) => void;
   onDone: () => void;
+  /** Optional — fires when the model used web search and returned citations. */
+  onCitations?: (threadId: string, citations: Citation[]) => void;
   onFatalError?: (err: Error) => void;
 }
 
 export async function streamPrompt(
   getToken: () => Promise<string | null>,
-  payload: { sessionId: string; prompt: string; threadIds: string[] },
+  payload: {
+    sessionId: string;
+    prompt: string;
+    threadIds: string[];
+    /** Optional GEO/SEO location — server applies framing + native web search. */
+    location?: PromptLocation;
+  },
   callbacks: StreamCallbacks,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -64,6 +86,8 @@ export async function retryPrompt(
     threadIds: string[];
     /** Per-thread overrides — threads not listed retry verbatim from their latest user message. */
     edits?: RetryOverride[];
+    /** Optional location to apply to the retried turn (overrides the original turn's stamp). */
+    location?: PromptLocation;
   },
   callbacks: StreamCallbacks,
   signal?: AbortSignal,
@@ -146,6 +170,8 @@ async function postAndParseSSE(
 
         if (data.type === 'token') {
           callbacks.onToken(threadId, data.token);
+        } else if (data.type === 'citations') {
+          callbacks.onCitations?.(threadId, data.citations);
         } else if (data.type === 'end') {
           callbacks.onEnd(threadId, data.messageId);
         } else if (data.type === 'error') {

@@ -6,7 +6,11 @@ import {
   ArrayMinSize,
   ArrayMaxSize,
   MaxLength,
+  IsOptional,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
+import { LocationDto } from '../../common/dto/location.dto.js';
 
 export class SendPromptDto {
   @IsUUID()
@@ -27,4 +31,21 @@ export class SendPromptDto {
   // calls. Prevents cost-exfiltration by a single malicious POST.
   @ArrayMaxSize(10)
   threadIds!: string[];
+
+  /**
+   * Optional GEO/SEO visibility-testing location. When set:
+   *   - prepended as an invisible "you are answering a user located in …"
+   *     system message before history (every model),
+   *   - and (for search-capable models) attached as `user_location` on the
+   *     `openrouter:web_search` server tool with `engine: "native"` so
+   *     grounded results are actually localized.
+   *
+   * Never shown in the visible transcript. Single location for now; the
+   * field is shaped so a future multi-region fan-out can be added without
+   * breaking single-location callers.
+   */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => LocationDto)
+  location?: LocationDto;
 }

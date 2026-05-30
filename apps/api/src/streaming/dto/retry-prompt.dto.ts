@@ -9,6 +9,7 @@ import {
   MaxLength,
 } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
+import { LocationDto } from '../../common/dto/location.dto.js';
 
 /**
  * Per-thread retry override. Both fields are optional:
@@ -64,6 +65,16 @@ export class RetryPromptDto {
   @Type(() => RetryOverrideEntry)
   @Transform(({ value }: { value: unknown }) => value ?? [], { toClassOnly: true })
   edits?: RetryOverrideEntry[];
+
+  /**
+   * Optional GEO/SEO location to apply to the retried turn. Mirrors
+   * SendPromptDto.location so retries can carry the same geo framing
+   * forward. If omitted, retry behaves exactly as before (no location).
+   */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => LocationDto)
+  location?: LocationDto;
 }
 
 // Re-export the entry class so the controller can build a typed map from it.
